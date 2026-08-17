@@ -1,0 +1,12 @@
+# PRS Factory internals — never commit these to your repo
+adws/adw_data/
+adws/adw_sssf_config/
+__pycache__/
+*.pyc
+.workbench/
+.vite-override.mjs
+
+# sssf runtime
+adws/adw_data/sessions/
+adws/adw_data/sssf.db*
+.env

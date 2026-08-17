@@ -1,0 +1,10 @@
+{
+  "name": "market-intelligence-phase1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Market Intelligence web app — Phase 1 (vanilla ES modules, no build step; runs directly in StackBlitz)",
+  "scripts": {
+    "smoke": "node tests/smoke.mjs"
+  }
+}
