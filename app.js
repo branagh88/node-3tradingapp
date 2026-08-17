@@ -115,6 +115,12 @@ function fillSettingsForm() {
  set('baseURL', cfg.baseURL);
  set('apiKey', cfg.apiKey);
  set('pollInterval', cfg.settings.pollInterval);
+ set('apiVersion', cfg.apiVersion);
+ set('stockEndpoint', cfg.stockEndpoint);
+ set('cryptoEndpoint', cfg.cryptoEndpoint);
+ set('wsEndpoint', cfg.wsEndpoint);
+ const capSearch = document.querySelector('[name="capabilitiesSearch"]');
+ if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
 }
 
 async function testConnection() {
@@ -168,11 +174,25 @@ function wireSettings() {
      const elBase = document.querySelector('[name="baseURL"]');
      const elKey = document.querySelector('[name="apiKey"]');
      const elPoll = document.querySelector('[name="pollInterval"]');
-     
+     const elVersion = document.querySelector('[name="apiVersion"]');
+     const elStock = document.querySelector('[name="stockEndpoint"]');
+     const elCrypto = document.querySelector('[name="cryptoEndpoint"]');
+     const elWs = document.querySelector('[name="wsEndpoint"]');
+     const capSearch = document.querySelector('[name="capabilitiesSearch"]');
+     const clean = (el) => (el ? el.value.trim() || undefined : undefined);
+
      const newCfg = {
        ...cfg,
        baseURL: elBase ? elBase.value.trim() : cfg.baseURL,
        apiKey: elKey ? elKey.value.trim() : cfg.apiKey,
+       apiVersion: clean(elVersion) ?? cfg.apiVersion,
+       stockEndpoint: clean(elStock) ?? cfg.stockEndpoint,
+       cryptoEndpoint: clean(elCrypto) ?? cfg.cryptoEndpoint,
+       wsEndpoint: clean(elWs) ?? cfg.wsEndpoint,
+       capabilities: {
+         ...(cfg.capabilities || {}),
+         search: capSearch ? capSearch.checked : (cfg.capabilities ? cfg.capabilities.search !== false : true),
+       },
        settings: {
          ...cfg.settings,
          pollInterval: elPoll ? Number(elPoll.value) || 30 : cfg.settings.pollInterval

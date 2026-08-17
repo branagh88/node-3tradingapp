@@ -57,3 +57,34 @@ export function fmtTime(value) {
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
+
+// Tiny in-process event bus. market-data.js / charts.js / assets.js all do
+// `import { bus } from './utils.js'` and emit/observe app events (e.g.
+// 'market-data:updated', 'api:error', 'watchlist:changed').
+export const bus = {
+  _listeners: new Map(),
+  on(event, handler) {
+    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
+    this._listeners.get(event).add(handler);
+    return () => this.off(event, handler);
+  },
+  off(event, handler) {
+    const set = this._listeners.get(event);
+    if (!set) return this;
+    set.delete(handler);
+    if (set.size === 0) this._listeners.delete(event);
+    return this;
+  },
+  emit(event, payload) {
+    const set = this._listeners.get(event);
+    if (!set || set.size === 0) return false;
+    for (const handler of [...set]) {
+      try {
+        handler(payload);
+      } catch (err) {
+        if (typeof console !== 'undefined') console.error('[MarketIntel] bus handler error:', err);
+      }
+    }
+    return true;
+  },
+};

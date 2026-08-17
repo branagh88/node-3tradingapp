@@ -32,8 +32,10 @@ function remove(name) {
   catch { return false; }
 }
 
-function collection(name) {
+function collection(name, max) {
   const collectionKey = `collection:${name}`;
+  const limit = Number(max);
+  const bounded = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0;
 
   function getAll() {
     const value = read(collectionKey, []);
@@ -42,15 +44,41 @@ function collection(name) {
 
   function saveAll(items) { write(collectionKey, items); }
 
+  // Move a known item to the end (most-recently-used) for bounded collections.
+  function touch(items, item) {
+    const idx = items.indexOf(item);
+    if (idx >= 0 && idx !== items.length - 1) {
+      items.splice(idx, 1);
+      items.push(item);
+    }
+    return items;
+  }
+
   return {
     getAll,
-    get(id) { return getAll().find(item => item && item.id === id) || null; },
+    // Smoke contract / generic read of the whole collection.
+    all() { return getAll(); },
+    get(id) {
+      const items = getAll();
+      const found = items.find(item => item && item.id === id);
+      if (!found) return undefined;
+      if (bounded) {
+        touch(items, found);
+        saveAll(items);
+      }
+      return found;
+    },
     put(item) {
       if (!item || item.id == null) return null;
       const items = getAll();
       const index = items.findIndex(existing => existing.id === item.id);
-      if (index >= 0) items[index] = item;
-      else items.push(item);
+      if (index >= 0) {
+        items[index] = item;
+        if (bounded) touch(items, item);
+      } else {
+        items.push(item);
+      }
+      if (bounded && items.length > bounded) items.splice(0, items.length - bounded);
       saveAll(items);
       return item;
     },

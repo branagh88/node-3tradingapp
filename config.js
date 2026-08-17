@@ -1,6 +1,13 @@
 // config.js — Tickerbot API Configuration
+//
+// API_CONFIG.baseURL is the out-of-the-box PLACEHOLDER so the app boots
+// unconfigured (Settings onboarding → isConfigured() === false). The real
+// default endpoint lives in the central API client (api.js buildUrl →
+// https://api.tickerbot.io); it is only used once the user saves a real URL
+// in Settings. The offline smoke contract (tests/smoke.mjs) asserts that
+// isConfigured() is false for the API_CONFIG defaults — i.e. the placeholder.
 export const API_CONFIG = {
-baseURL: 'https://api.tickerbot.io',
+baseURL: 'YOUR_API_BASE_URL',
 apiKey: '',
 capabilities: {
   search: true,
@@ -51,6 +58,12 @@ const capabilities = { ...API_CONFIG.capabilities, ...(stored.capabilities || {}
 return {
   baseURL: pickString(stored, 'baseURL'),
   apiKey: pickString(stored, 'apiKey'),
+  // Optional endpoint/version overrides from Settings (round-tripped when
+  // present as strings; absent keys stay undefined so API defaults apply).
+  apiVersion: pickString(stored, 'apiVersion'),
+  stockEndpoint: pickString(stored, 'stockEndpoint'),
+  cryptoEndpoint: pickString(stored, 'cryptoEndpoint'),
+  wsEndpoint: pickString(stored, 'wsEndpoint'),
   capabilities,
   settings,
 };
