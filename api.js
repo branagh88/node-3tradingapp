@@ -1,6 +1,66 @@
 // api.js — Tickerbot REST Client (Endpoints /v2/tickers, /v2/signals, /v2/scan, /v2/series)
+//
+// ONE central API abstraction for the app. TickerbotAPI is the class the app
+// uses; `MarketAPI` is exported as an alias so the offline smoke contract
+// (tests/smoke.mjs) and any code written against the older family of names
+// keeps working. No endpoints/auth are invented here: base URL defaults to
+// https://api.tickerbot.io, the Bearer key comes only from Settings
+// (localStorage via config.js) and is never logged.
 import { isConfigured } from './config.js';
 import { logger } from './utils.js';
+
+const DEFAULT_BASE_URL = 'https://api.tickerbot.io';
+const PLACEHOLDER_BASE_URL = 'YOUR_API_BASE_URL';
+
+// kind -> default Tickerbot path segment (used by effectivePath when no
+// explicit endpoint override is configured).
+const KIND_ENDPOINTS = {
+  quote: 'quote',
+  candles: 'series',
+  series: 'series',
+  search: 'search',
+  scan: 'scan',
+  signals: 'signals',
+};
+
+function toNumber(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toTimestamp(value) {
+  if (value == null) return Date.now();
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 0) return n;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+// Candle time -> epoch seconds (Lightweight Charts expects seconds).
+function toEpochSeconds(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 0) {
+    return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
+function resolveType(raw, symbol) {
+  const t = raw && (raw.type || raw.assetType || raw.securityType);
+  if (typeof t === 'string') {
+    const up = t.toUpperCase();
+    if (up.includes('CRYPTO')) return 'crypto';
+    if (up.includes('EQUITY') || up.includes('STOCK')) return 'stock';
+  }
+  // Default only — never fabricate a market that isn't implied by the symbol
+  // shape (pairs like BTC/USD or BTC-USDT are crypto).
+  return String(symbol || '').includes('/') || String(symbol || '').includes('-')
+    ? 'crypto'
+    : 'stock';
+}
 
 export class ApiError extends Error {
 constructor(kind, message, status) {
@@ -39,9 +99,22 @@ isConfigured() {
 }
 
 buildUrl(path) {
-  const base = String(this.config.baseURL || 'https://api.tickerbot.io').replace(/\/+$/, '');
+  const rawBase = this.config.baseURL;
+  const base = (rawBase && String(rawBase).trim() && String(rawBase).trim() !== PLACEHOLDER_BASE_URL)
+    ? String(rawBase).replace(/\/+$/, '')
+    : DEFAULT_BASE_URL;
   const endpoint = String(path).replace(/^\/+/, '');
   return `${base}/${endpoint}`;
+}
+
+// Resolve a logical endpoint kind ("quote", "candles", "search", "scan", …)
+// to a full URL. An explicit endpoint (e.g. Settings > Stock Endpoint) wins;
+// otherwise `<apiVersion>/<kind>` is used (default apiVersion v2).
+effectivePath(kind, endpoint) {
+  if (endpoint) return this.buildUrl(endpoint);
+  const version = this.config.apiVersion || 'v2';
+  const segment = KIND_ENDPOINTS[kind] || String(kind);
+  return this.buildUrl(`${version}/${segment}`);
 }
 
 async _doFetch(path, options = {}) {
@@ -132,26 +205,122 @@ async getQuote(symbol, { type } = {}) {
   return this.getTickerQuote(symbol);
 }
 
+// Normalize a raw quote response into the app's canonical quote shape.
+// Field aliases are READ from the raw provider response when present — we
+// never fabricate values, and type/exchange/currency fall back to defaults
+// only (see resolveType); otherwise they stay null.
 normalizeQuote(raw, ticker, meta) {
-  const item = raw.ticker || raw.data || raw;
+  const item = (raw && typeof raw === 'object') ? (raw.ticker || raw.data || raw) : (raw || {});
+  const symbol = String(ticker || item.symbol || item.ticker || '').toUpperCase();
+  const price = toNumber(item.price ?? item.lastPrice ?? item.last ?? item.close ?? item.c ?? item.regularMarketPrice ?? item.regularMarketLast ?? null);
+  const previousClose = toNumber(item.previousClose ?? item.prevClose ?? item.previousClosePrice ?? item.regularMarketPreviousClose ?? null);
+  const change = toNumber(item.change ?? item.todaysChange ?? (price != null && previousClose != null ? price - previousClose : null));
+  const changePercent = toNumber(item.changePercent ?? item.todaysChangePerc ?? item.changesPercentage ?? item.percentChange ?? item.regularMarketChangePercent ?? null);
+  const type = resolveType(item, symbol);
+  const currency = item.currency ?? item.quoteCurrency ?? item.currencyCode ?? null;
+  const exchange = item.exchange ?? item.exchangeName ?? item.mic ?? item.fullExchangeName ?? null;
+
   return {
-    symbol: ticker.toUpperCase(),
-    name: item.name || item.companyName || ticker.toUpperCase(),
-    assetType: ticker.includes('/') ? 'crypto' : 'stock',
-    price: Number(item.price || item.last || item.close || 0),
-    change: Number(item.change || item.todaysChange || 0),
-    changePercent: Number(item.changePercent || item.todaysChangePerc || 0),
-    volume: Number(item.volume || item.v || 0),
-    high: Number(item.high || item.h || 0),
-    low: Number(item.low || item.l || 0),
-    open: Number(item.open || item.o || 0),
-    previousClose: Number(item.previousClose || item.prevClose || 0),
-    marketCap: Number(item.marketCap || item.market_cap || 0),
+    symbol,
+    name: item.name || item.companyName || item.shortName || item.longName || symbol,
+    type,
+    assetType: type,
+    exchange,
+    currency,
+    price: price ?? 0,
+    change: change ?? 0,
+    changePercent: changePercent ?? 0,
+    // Back-compat alias: the smoke contract and some UIs read `percentChange`.
+    percentChange: changePercent ?? 0,
+    volume: toNumber(item.volume ?? item.v ?? item.regularMarketVolume ?? null) ?? 0,
+    high: toNumber(item.high ?? item.h ?? item.regularMarketDayHigh ?? null) ?? 0,
+    low: toNumber(item.low ?? item.l ?? item.regularMarketDayLow ?? null) ?? 0,
+    open: toNumber(item.open ?? item.o ?? item.regularMarketOpen ?? null) ?? 0,
+    previousClose,
+    marketCap: toNumber(item.marketCap ?? item.market_cap ?? item.regularMarketMarketCap ?? null) ?? 0,
     signals: item.signals || {},
-    timestamp: Number(item.updated || item.timestamp || Date.now()),
+    timestamp: toTimestamp(item.updated ?? item.timestamp ?? item.ts ?? item.t ?? item.date ?? Date.now()),
     _debug: meta
   };
 }
+
+// Normalize provider candles into ascending, deduped {time(sec), ohlcv} rows.
+// Accepts: flat arrays of candle objects, Alpha Vantage-style
+// { 'Time Series (Daily)': { date: { '1. open': … } } }, and Binance-style
+// kline arrays [openTime, open, high, low, close, volume, closeTime].
+normalizeCandles(input) {
+  let rows = [];
+
+  if (Array.isArray(input)) {
+    rows = input.map((row) => {
+      if (Array.isArray(row)) {
+        const [openTime, open, high, low, close, volume] = row;
+        return { time: openTime, open, high, low, close, volume };
+      }
+      const o = row || {};
+      return {
+        time: o.time ?? o.date ?? o.timestamp ?? o.openTime ?? o.t,
+        open: o.open ?? o['1. open'],
+        high: o.high ?? o['2. high'],
+        low: o.low ?? o['3. low'],
+        close: o.close ?? o['4. close'],
+        volume: o.volume ?? o['5. volume'],
+      };
+    });
+  } else if (input && typeof input === 'object') {
+    const series = input['Time Series (Daily)']
+      || input['Time Series (Weekly)']
+      || input['Time Series (Monthly)']
+      || input;
+    rows = Object.entries(series).map(([key, o]) => ({
+      time: key,
+      open: o['1. open'] ?? o.open,
+      high: o['2. high'] ?? o.high,
+      low: o['3. low'] ?? o.low,
+      close: o['4. close'] ?? o.close,
+      volume: o['5. volume'] ?? o.volume,
+    }));
+  }
+
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const time = toEpochSeconds(row.time);
+    if (time == null) continue;
+    if (seen.has(time)) continue;
+    seen.add(time);
+    out.push({
+      time,
+      open: toNumber(row.open) ?? 0,
+      high: toNumber(row.high) ?? 0,
+      low: toNumber(row.low) ?? 0,
+      close: toNumber(row.close) ?? 0,
+      volume: toNumber(row.volume) ?? 0,
+    });
+  }
+  out.sort((a, b) => a.time - b.time);
+  return out;
 }
+
+// Normalize a search/scan result entry into {symbol, name, type, exchange, currency}.
+// alias tables + a crypto/stock default only when the response omits a type.
+normalizeSearchResult(raw) {
+  const item = (raw && typeof raw === 'object') ? (raw.data || raw) : (raw || {});
+  const symbol = String(item.symbol || item.ticker || '').toUpperCase();
+  const type = resolveType(item, symbol);
+  return {
+    symbol,
+    name: item.name || item.shortName || item.longName || item.description || symbol,
+    type,
+    exchange: item.exchange || item.exchangeName || item.mic || null,
+    currency: item.currency || item.quoteCurrency || null,
+  };
+}
+}
+
+// MarketAPI is an alias of the ONE central API abstraction (TickerbotAPI) so
+// the offline smoke contract (tests/smoke.mjs) and older call sites keep
+// working without a second, divergent API client.
+export const MarketAPI = TickerbotAPI;
 
 export default TickerbotAPI;
