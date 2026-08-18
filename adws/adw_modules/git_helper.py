@@ -103,7 +103,7 @@ def rev(ref: str = "HEAD") -> str:
         # A fresh repo with no commits has an UNBORN HEAD (seen: GDD-tab
         # projects — `git init` but no initial commit). Callers treat "" as
         # "no baseline yet" instead of the run crashing on rev-parse.
-        if "unknown revision" in result.stderr:
+        if "unknown revision" in result.stderr or "Needed a single revision" in result.stderr:
             return ""
         raise RuntimeError(f"git rev-parse {ref} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -113,7 +113,7 @@ def short_sha(ref: str = "HEAD") -> str:
     result = subprocess.run(["git", "rev-parse", "--short", ref or "HEAD"],
                             capture_output=True, text=True)
     if result.returncode != 0:
-        if "unknown revision" in result.stderr:
+        if "unknown revision" in result.stderr or "Needed a single revision" in result.stderr:
             return ""     # unborn HEAD or unresolvable ref — no sha yet
         raise RuntimeError(f"git rev-parse --short {ref} failed: {result.stderr.strip()}")
     return result.stdout.strip()
