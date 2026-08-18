@@ -21,44 +21,149 @@ let pendingConfirm = null;
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+// boot() is hardened so a single failing subsystem can NEVER blank the app:
+// every init/wire step is guarded independently, router() always runs (with a
+// finally-guarded fallback that reveals at least one .screen), and boot errors
+// are surfaced via the global banner + toast instead of silently hiding every
+// screen. (Field bug: boot() aborted on a ReferenceError before router() ran,
+// leaving all hidden-attribute .screen sections invisible — blank main + dead
+// nav links.)
 function boot() {
- storage.migrate();
- const config = loadConfig();
+  // Phase 1 — storage/config. Failure must not prevent UI from rendering.
+  let config = null;
+  try {
+    storage.migrate();
+    config = loadConfig();
+  } catch (err) {
+    reportBootError('[boot] storage/config init failed', err);
+    config = {};
+  }
 
- api = new TickerbotAPI(config);
- 
- assets = new AssetsController(api);
- marketData = new MarketData({ api, getAssets: () => assets.getWatchlist() });
- chart = new ChartController({
-   mainEl: $('#main-chart'),
-   rsiEl: $('#rsi-chart'),
-   wrapEl: $('#chart-wrap'),
-   timeframeEl: $('#timeframe-bar'),
-   indicatorEl: $('#indicator-bar'),
-   emptyEl: $('#chart-empty'),
-   tooltipEl: $('#chart-tooltip'),
-   statusEl: $('#chart-status'),
-   api,
-   getAsset: (sym) => assets.getAsset(sym),
- });
+  // Phase 2 — subsystem init. Each constructor is independent: one throw must
+  // not abort the rest, and none may prevent router() from revealing a screen.
+  try {
+    api = new TickerbotAPI(config);
+  } catch (err) {
+    reportBootError('[boot] API client init failed', err);
+    api = null;
+  }
 
- wireSearch();
- wireSettings();
- wireWatchlistControls();
- wireConfirmModal();
- wireEvents();
+  try {
+    assets = new AssetsController(api);
+  } catch (err) {
+    reportBootError('[boot] AssetsController init failed', err);
+    assets = null;
+  }
 
- if (!isConfigured(config)) {
-   const onboarding = $('#settings-onboarding');
-   if (onboarding) onboarding.hidden = false;
-   if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-     window.location.hash = '#/settings';
-   }
- }
+  try {
+    marketData = new MarketData({ api, getAssets: () => (assets ? assets.getWatchlist() : []) });
+  } catch (err) {
+    reportBootError('[boot] MarketData init failed', err);
+    marketData = null;
+  }
 
- router();
- window.addEventListener('hashchange', router);
- if (isConfigured(config)) marketData.start();
+  try {
+    chart = new ChartController({
+      mainEl: $('#main-chart'),
+      rsiEl: $('#rsi-chart'),
+      wrapEl: $('#chart-wrap'),
+      timeframeEl: $('#timeframe-bar'),
+      indicatorEl: $('#indicator-bar'),
+      emptyEl: $('#chart-empty'),
+      tooltipEl: $('#chart-tooltip'),
+      statusEl: $('#chart-status'),
+      api,
+      getAsset: (sym) => (assets ? assets.getAsset(sym) : null),
+    });
+  } catch (err) {
+    reportBootError('[boot] ChartController init failed', err);
+    chart = null;
+  }
+
+  // Phase 3 — event wiring. Each wire* is guarded independently so a single
+  // binding failure cannot abort the rest of boot (or the router below).
+  guardedWire(wireSearch, '[boot] wireSearch');
+  guardedWire(wireSettings, '[boot] wireSettings');
+  guardedWire(wireWatchlistControls, '[boot] wireWatchlistControls');
+  guardedWire(wireConfirmModal, '[boot] wireConfirmModal');
+  guardedWire(wireEvents, '[boot] wireEvents');
+
+  // Phase 4 — onboarding redirect (only when the app is unconfigured).
+  try {
+    if (config && !isConfigured(config)) {
+      const onboarding = $('#settings-onboarding');
+      if (onboarding) onboarding.hidden = false;
+      if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
+        window.location.hash = '#/settings';
+      }
+    }
+  } catch (err) {
+    reportBootError('[boot] onboarding redirect failed', err);
+  }
+
+  // Phase 5 — router. This MUST always run so at least one .screen is
+  // revealed; the finally-guard forces a fallback reveal when it fails.
+  let routerOk = false;
+  try {
+    router();
+    routerOk = true;
+  } catch (err) {
+    reportBootError('[router] failed to render route', err);
+  } finally {
+    if (!routerOk) revealFallbackScreen();
+  }
+
+  window.addEventListener('hashchange', () => {
+    try {
+      router();
+    } catch (err) {
+      reportBootError('[router] hashchange render failed', err);
+      revealFallbackScreen();
+    }
+  });
+
+  try {
+    if (config && isConfigured(config) && marketData) marketData.start();
+  } catch (err) {
+    reportBootError('[boot] market data start failed', err);
+  }
+}
+
+// Run one boot sub-step and report (never rethrow) its failure.
+function guardedWire(fn, label) {
+  try {
+    fn();
+  } catch (err) {
+    reportBootError(label || 'boot step failed', err);
+  }
+}
+
+// Surface a boot/runtime failure visibly (global banner + toast) instead of
+// silently blanking. Both sinks are themselves guarded so this can't throw.
+function reportBootError(label, err) {
+  const detail = err && err.message ? `${label}: ${err.message}` : label;
+  logger.error(label, err);
+  try {
+    const banner = document.getElementById('global-banner');
+    if (banner && banner.hidden) {
+      banner.hidden = false;
+      banner.textContent = `⚠ ${detail}`;
+    }
+  } catch { /* never let the banner itself throw */ }
+  try { toast(detail, 'error', 6000); } catch { /* never let toast throw */ }
+}
+
+// Guarantee the app is never a blank page: if router() failed and no .screen
+// is visible, force the watchlist (or the first) screen visible.
+function revealFallbackScreen() {
+  const screens = document.querySelectorAll('.screen');
+  const anyVisible = Array.prototype.some.call(screens, (s) => !s.hidden);
+  if (anyVisible) return;
+  const target = document.querySelector('#screen-watchlist') || screens[0];
+  if (target) {
+    target.hidden = false;
+    reportBootError('[router] fallback: no screen was visible — revealed watchlist', null);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +187,7 @@ function router() {
 
  if (baseRoute === 'watchlist') {
    $('#screen-watchlist').hidden = false;
-   assets.renderWatchlist();
+   if (assets) assets.renderWatchlist();
  } else if (baseRoute === 'search') {
    $('#screen-search').hidden = false;
  } else if (baseRoute === 'settings') {
@@ -97,10 +202,10 @@ function router() {
 }
 
 function renderAssetScreen(symbol) {
- const entry = assets.getAsset(symbol);
+ const entry = assets ? assets.getAsset(symbol) : null;
  $('#asset-name').textContent = entry ? entry.name : symbol.toUpperCase();
  $('#asset-ticker').textContent = symbol.toUpperCase();
- chart.renderAsset(symbol);
+ if (chart) chart.renderAsset(symbol);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,11 +304,11 @@ function wireSettings() {
        }
      };
      saveConfig(newCfg);
-     api.setConfig(newCfg);
+     if (api) api.setConfig(newCfg);
      toast('Settings saved successfully', 'success');
      if (isConfigured(newCfg)) {
        $('#settings-onboarding').hidden = true;
-       marketData.start();
+       if (marketData) marketData.start();
        window.location.hash = '#/watchlist';
      }
    });
@@ -227,6 +332,10 @@ function wireSearch() {
      return;
    }
    if (hintEl) hintEl.hidden = true;
+   if (!api) {
+     resultsEl.innerHTML = '<div class="error-banner">Search unavailable — API client failed to initialize at boot.</div>';
+     return;
+   }
    try {
      const scanResults = await api.runScan({ query: q });
      if (!scanResults.length) {
@@ -243,7 +352,7 @@ function wireSearch() {
      resultsEl.querySelectorAll('.select-asset-btn').forEach(btn => {
        btn.addEventListener('click', () => {
          const sym = btn.dataset.symbol;
-         assets.promptAdd(sym);
+         if (assets) assets.promptAdd(sym);
        });
      });
    } catch {
@@ -252,7 +361,7 @@ function wireSearch() {
  });
 }
 
-function wireWatchListControls() {
+function wireWatchlistControls() {
  const sortSelect = $('#watchlist-sort');
  if (sortSelect && assets) {
    sortSelect.addEventListener('change', (e) => {
@@ -267,7 +376,7 @@ function wireConfirmModal() {
  const addBtn = $('#confirm-add');
  if (addBtn) {
    addBtn.addEventListener('click', async () => {
-     if (pendingConfirm) {
+     if (pendingConfirm && assets) {
        await assets.addAsset(pendingConfirm);
        modal.close();
        pendingConfirm = null;
@@ -283,4 +392,31 @@ function wireEvents() {
  });
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+// boot() runs on DOMContentLoaded. If this module evaluates AFTER that event
+// already fired (slow WebView / delayed module fetch), plain listener
+// registration would mean boot() NEVER runs and every .screen stays hidden —
+// the blank-main bug. readyState check covers that; a watchdog covers any
+// other path that leaves the app with zero visible screens.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+
+// Last-resort safety net: if nothing revealed a .screen shortly after load
+// (e.g. an unexpected throw outside boot), force one visible so the app is
+// never a blank page, and surface the failure.
+setTimeout(() => {
+  try {
+    const anyVisible = Array.prototype.some.call(
+      document.querySelectorAll('.screen'),
+      (s) => !s.hidden
+    );
+    if (!anyVisible) {
+      reportBootError('[boot] watchdog: no screen visible after load — forcing fallback', null);
+      revealFallbackScreen();
+    }
+  } catch {
+    /* the watchdog must never throw */
+  }
+}, 2500);
