@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AI Market Intelligence — Phase 1: watchlist, live quotes, charts and indicators. Vanilla ES modules, no build step." />
+  <title>Market Intelligence</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- TradingView Lightweight Charts v4 (pinned) — global `LightweightCharts` -->
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Lucide icons (pinned major) — UI uses inline SVGs with text fallbacks, so icon
+       rendering never depends on this CDN being reachable. -->
+  <script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Market Intelligence</span>
+      <span class="brand-phase">Phase 1</span>
+    </div>
+    <div class="topbar__right">
+      <span id="global-status" class="status-pill status--unavailable" title="Global market data status">NOT CONFIGURED</span>
+      <a class="icon-btn" href="#/settings" title="Settings" aria-label="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <aside id="sidebar" class="sidebar" aria-label="Primary">
+    <nav class="nav">
+      <a class="nav-item" href="#/watchlist" data-nav="watchlist">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+        <span>Watchlist</span>
+      </a>
+      <a class="nav-item" href="#/search" data-nav="search">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search</span>
+      </a>
+      <a class="nav-item" href="#/settings" data-nav="settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>Settings</span>
+      </a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div id="global-banner" class="global-banner" hidden></div>
+
+    <!-- Watchlist -->
+    <section id="screen-watchlist" class="screen" hidden>
+      <div class="screen-head">
+        <h1>Watchlist</h1>
+        <div class="watchlist-controls">
+          <span class="chip chip--static" title="Phase 1: only ALL filter; sentiment filters arrive in Phase 4">ALL</span>
+          <label class="sort-label">
+            Sort
+            <select id="watchlist-sort" class="select">
+              <option value="name">Name</option>
+              <option value="ticker">Ticker</option>
+              <option value="price">Price (high → low)</option>
+              <option value="changePercent">Change % (high → low)</option>
+              <option value="volume">Volume (high → low)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div id="watchlist-error" class="error-banner" hidden></div>
+      <div id="watchlist-empty" class="empty-state" hidden>
+        <p class="empty-title">Your watchlist is empty</p>
+        <p class="empty-sub">Search for an asset and confirm it to start tracking live quotes.</p>
+        <a class="btn btn--primary" href="#/search">Search assets</a>
+      </div>
+      <div id="watchlist-grid" class="card-grid"></div>
+    </section>
+
+    <!-- Search -->
+    <section id="screen-search" class="screen" hidden>
+      <div class="screen-head">
+        <h1>Search assets</h1>
+      </div>
+      <div class="search-box">
+        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="search-input" class="input input--search" type="text" placeholder="Search by ticker or name (min 2 characters)…" autocomplete="off" spellcheck="false" />
+      </div>
+      <div id="search-error" class="error-banner" hidden></div>
+      <div id="search-hint" class="empty-state">
+        <p class="empty-sub">Type at least 2 characters. Results come from your configured market-data API — nothing is simulated.</p>
+      </div>
+      <div id="search-results" class="result-list"></div>
+    </section>
+
+    <!-- Settings -->
+    <section id="screen-settings" class="screen" hidden>
+      <div class="screen-head">
+        <h1>Settings</h1>
+      </div>
+      <div id="settings-onboarding" class="onboarding" hidden>
+        <h2>Connect your market-data API</h2>
+        <p>
+          This app never fabricates prices. Enter your API provider&rsquo;s base URL and key below to enable
+          live quotes, search and charts. Until then every data area shows
+          <strong>UNAVAILABLE</strong> / <strong>NOT CONFIGURED</strong>.
+        </p>
+      </div>
+      <form id="settings-form" class="settings-form" novalidate>
+        <div class="card">
+          <h2>API connection</h2>
+          <label class="field">
+            <span>API Base URL</span>
+            <input class="input" name="baseURL" type="url" placeholder="https://api.example.com" required />
+            <small class="hint">Placeholder: <code>YOUR_API_BASE_URL</code></small>
+          </label>
+          <label class="field">
+            <span>API Key</span>
+            <input class="input" name="apiKey" type="password" autocomplete="off" placeholder="YOUR_API_KEY_HERE" />
+            <small class="hint">Placeholder: <code>YOUR_API_KEY_HERE</code> — stored only in your browser (ma.config). Never logged.</small>
+          </label>
+          <label class="field">
+            <span>API Version</span>
+            <input class="input" name="apiVersion" type="text" placeholder="v1 (optional)" />
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Stock Endpoint</span>
+              <input class="input" name="stockEndpoint" type="text" placeholder="/quote (optional)" />
+            </label>
+            <label class="field">
+              <span>Crypto Endpoint</span>
+              <input class="input" name="cryptoEndpoint" type="text" placeholder="/quote (optional)" />
+            </label>
+          </div>
+          <label class="field">
+            <span>WebSocket Endpoint (optional)</span>
+            <input class="input" name="wsEndpoint" type="text" placeholder="wss://…/stream (optional)" />
+          </label>
+        </div>
+
+        <div class="card">
+          <h2>Polling</h2>
+          <label class="field">
+            <span>Poll interval</span>
+            <select class="select" name="pollInterval">
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="30">30 seconds (default)</option>
+              <option value="60">60 seconds</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="card card--advanced">
+          <h2>Advanced</h2>
+          <label class="field field--check">
+            <input type="checkbox" name="capabilitiesSearch" />
+            <span>Enable search endpoint (uncheck to use exact-symbol quote lookup instead)</span>
+          </label>
+        </div>
+
+        <div class="settings-actions">
+          <button id="settings-test" type="button" class="btn btn--ghost">Test connection</button>
+          <button id="settings-save" type="submit" class="btn btn--primary">Save config</button>
+        </div>
+        <div id="settings-test-result" class="settings-test-result" hidden></div>
+      </form>
+    </section>
+
+    <!-- Asset detail -->
+    <section id="screen-asset" class="screen" hidden>
+      <div class="asset-head">
+        <a class="icon-btn" href="#/watchlist" id="asset-back" title="Back to watchlist" aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+        </a>
+        <div id="asset-header" class="asset-header">
+          <div class="asset-title">
+            <h1 id="asset-name">—</h1>
+            <span id="asset-ticker" class="asset-ticker">—</span>
+          </div>
+          <div class="asset-quote">
+            <span id="asset-price" class="asset-price">—</span>
+            <span id="asset-change" class="asset-change">—</span>
+            <span id="asset-badge" class="badge badge--unavailable">UNAVAILABLE</span>
+            <span id="asset-updated" class="asset-updated">Updated: —</span>
+          </div>
+        </div>
+      </div>
+      <div id="asset-error" class="error-banner" hidden></div>
+      <div id="timeframe-bar" class="chip-row"></div>
+      <div id="indicator-bar" class="chip-row chip-row--ind"></div>
+      <div id="chart-status" class="chart-status" hidden></div>
+      <div id="chart-wrap" class="chart-wrap">
+        <div id="main-chart"></div>
+        <div id="rsi-chart" hidden></div>
+      </div>
+      <div id="chart-empty" class="empty-state" hidden>
+        <p class="empty-title">UNAVAILABLE — no historical data</p>
+        <p class="empty-sub">This app renders only candles returned by your API. If history is empty, check the asset/timeframe and your API configuration.</p>
+      </div>
+      <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+    </section>
+  </main>
+
+  <nav id="bottomnav" class="bottomnav" aria-label="Primary mobile">
+    <a class="nav-item" href="#/watchlist" data-nav="watchlist">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+      <span>Watchlist</span>
+    </a>
+    <a class="nav-item" href="#/search" data-nav="search">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <span>Search</span>
+    </a>
+    <a class="nav-item" href="#/settings" data-nav="settings">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>Settings</span>
+    </a>
+  </nav>
+
+  <!-- CONFIRM ASSET modal — used for EVERY add (B5.3) -->
+  <dialog id="confirm-modal" class="modal">
+    <form method="dialog" class="modal-body" id="confirm-form">
+      <button class="modal-close" value="cancel" aria-label="Close">✕</button>
+      <h2>Confirm asset</h2>
+      <div class="confirm-grid">
+        <div class="confirm-row"><span>Name</span><b id="confirm-name">—</b></div>
+        <div class="confirm-row"><span>Ticker</span><b id="confirm-symbol">—</b></div>
+        <div class="confirm-row"><span>Type</span><b id="confirm-type">—</b></div>
+        <div class="confirm-row"><span>Exchange</span><b id="confirm-exchange">—</b></div>
+        <div class="confirm-row"><span>Currency</span><b id="confirm-currency">—</b></div>
+        <div class="confirm-row"><span>Quote preview</span><b id="confirm-price">UNAVAILABLE</b></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="confirm-cancel" class="btn btn--ghost" value="cancel">Cancel</button>
+        <button type="button" id="confirm-add" class="btn btn--primary">Add to watchlist</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

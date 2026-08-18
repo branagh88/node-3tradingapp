@@ -7,5 +7,25 @@
   "scripts": {
     "build": "node build-check.mjs",
     "smoke": "node tests/smoke.mjs"
+  },
+  "main": "Marketanalysis.js",
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/branagh88/node-3tradingapp.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/branagh88/node-3tradingapp/issues"
+  },
+  "homepage": "https://github.com/branagh88/node-3tradingapp#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0"
   }
 }
