@@ -5,6 +5,7 @@
   "type": "module",
   "description": "AI Market Intelligence web app — Phase 1 (vanilla ES modules, no build step; runs directly in StackBlitz)",
   "scripts": {
+    "build": "node build-check.mjs",
     "smoke": "node tests/smoke.mjs"
   }
 }
