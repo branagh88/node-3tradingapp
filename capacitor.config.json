@@ -1,0 +1,6 @@
+{
+  "appId": "com.petrockstudios.marketintelligence",
+  "appName": "Market Intelligence",
+  "webDir": "www",
+  "server": { "androidScheme": "https" }
+}
