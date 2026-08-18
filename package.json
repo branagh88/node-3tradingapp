@@ -6,7 +6,8 @@
   "description": "AI Market Intelligence web app — Phase 1 (vanilla ES modules, no build step; runs directly in StackBlitz)",
   "scripts": {
     "build": "node build-check.mjs",
-    "smoke": "node tests/smoke.mjs"
+    "smoke": "node tests/smoke.mjs",
+    "test:boot": "node tests/boot-harness.mjs"
   },
   "main": "Marketanalysis.js",
   "directories": {
@@ -27,5 +28,8 @@
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
   }
 }
