@@ -38,6 +38,7 @@ function boot() {
     reportBootError('[boot] storage/config init failed', err);
     config = {};
   }
+  updateGlobalStatus(config);
 
   // Phase 2 — subsystem init. Each constructor is independent: one throw must
   // not abort the rest, and none may prevent router() from revealing a screen.
@@ -337,6 +338,23 @@ async function testConnection() {
  }
 }
 
+// Reflect the configured state in the #global-status pill (index.html:23).
+// Nothing ever updated this static default markup, so it was stuck on the
+// initial NOT CONFIGURED class. Configured means a valid HTTP(S) base URL was
+// saved via Settings (isConfigured), NOT that a test connection succeeded —
+// the pill flips only after Save Config with a real URL.
+function updateGlobalStatus(cfg) {
+  try {
+    const el = document.getElementById('global-status');
+    if (!el) return;
+    const configured = isConfigured(cfg);
+    el.textContent = configured ? 'CONFIGURED' : 'NOT CONFIGURED';
+    el.classList.toggle('status--ok', configured);
+    el.classList.toggle('status--unavailable', !configured);
+    el.title = configured ? 'Tickerbot API configured' : 'Global market data status';
+  } catch { /* the status pill must never break boot */ }
+}
+
 function wireSettings() {
  const form = $('#settings-form');
  if (form) {
@@ -371,6 +389,7 @@ function wireSettings() {
        }
      };
      saveConfig(newCfg);
+     updateGlobalStatus(newCfg);
      if (api) api.setConfig(newCfg);
      toast('Settings saved successfully', 'success');
      if (isConfigured(newCfg)) {

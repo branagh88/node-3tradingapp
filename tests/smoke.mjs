@@ -83,6 +83,34 @@ ok('quote finviz-style + derived change', q3.price === 9.99 && q3.percentChange 
 const q4 = api.normalizeQuote({ data: { symbol: 'MSFT', regularMarketPrice: 420.11, regularMarketVolume: 20000000 } }, 'MSFT');
 ok('quote wrapped data object', q4.price === 420.11 && q4.volume === 20000000);
 
+// q5 — REAL Tickerbot /v2/tickers/{ticker} row shape (field names from the
+// published machine-readable schema, tickerbot.io/docs/schema.json — the live
+// endpoint returns exactly these bare names: price, previous_close, day_change,
+// day_change_pct, session_open, session_high, session_low, volume_today,
+// currency_name, exchange, exchange_mic, market_cap, name, symbol). This fixture
+// is OFFLINE (no network) and proves normalizeQuote() maps the real provider
+// field names instead of falling through to the `price ?? 0` fallback.
+const q5 = api.normalizeQuote({
+  symbol: 'AAPL',
+  name: 'Apple Inc.',
+  price: 232.87,
+  previous_close: 230.0,
+  day_change: 2.87,
+  day_change_pct: 1.25,
+  session_open: 230.5,
+  session_high: 233.5,
+  session_low: 230.2,
+  volume_today: 51200000,
+  currency_name: 'USD',
+  exchange: 'NASDAQ',
+  exchange_mic: 'XNAS',
+  market_cap: 3520000000000,
+  ts: '2026-08-19T12:00:00Z',
+}, 'AAPL');
+ok('quote Tickerbot schema row price', q5.price === 232.87 && q5.percentChange === 1.25 && q5.previousClose === 230.0);
+ok('quote Tickerbot schema row high/low/volume', q5.high === 233.5 && q5.low === 230.2 && q5.volume === 51200000);
+ok('quote Tickerbot schema row currency/exchange/marketCap', q5.currency === 'USD' && q5.exchange === 'NASDAQ' && q5.marketCap === 3520000000000);
+
 const candlesFlat = api.normalizeCandles([
   { date: '2026-01-03', open: 2, high: 5, low: 1, close: 4, volume: 100 },
   { date: '2026-01-01', open: 1, high: 3, low: 0.5, close: 2, volume: 90 },
