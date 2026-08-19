@@ -173,6 +173,31 @@ await new Promise((r) => setTimeout(r, 100));
 check('router reveals #screen-watchlist on #/watchlist', !A.document.querySelector('#screen-watchlist').hidden);
 
 // ---------------------------------------------------------------------------
+// Scenario A.2 — status pill (#global-status) reflects configured state:
+// NOT CONFIGURED on boot → CONFIGURED only after saving a real base URL.
+// The pill must NOT flip on the initial unconfigured boot, and must flip only
+// after Save Config with a valid URL (testConnection() alone does NOT save).
+// ---------------------------------------------------------------------------
+console.log('\nboot harness [status pill]:');
+const pill = A.document.getElementById('global-status');
+check('status pill exists in #global-status', !!pill);
+check('pill starts NOT CONFIGURED + status--unavailable',
+  pill && pill.textContent === 'NOT CONFIGURED' && pill.classList.contains('status--unavailable') && !pill.classList.contains('status--ok'),
+  `-> text=${pill && pill.textContent} class=${pill && pill.className}`);
+
+A.window.location.hash = '#/settings';
+await new Promise((r) => setTimeout(r, 100));
+const baseInput = A.document.querySelector('[name="baseURL"]');
+const keyInput = A.document.querySelector('[name="apiKey"]');
+if (baseInput) baseInput.value = 'https://api.tickerbot.io';
+if (keyInput) keyInput.value = 'tb_test_dummykey';
+A.document.getElementById('settings-form').dispatchEvent(new A.window.Event('submit', { bubbles: true, cancelable: true }));
+await new Promise((r) => setTimeout(r, 100));
+check('pill becomes CONFIGURED + status--ok after save of a real URL',
+  pill && pill.textContent === 'CONFIGURED' && pill.classList.contains('status--ok') && !pill.classList.contains('status--unavailable'),
+  `-> text=${pill && pill.textContent} class=${pill && pill.className}`);
+
+// ---------------------------------------------------------------------------
 // Scenario B — fault injection: router() throws mid-render. The hardening must
 // still reveal at least one .screen and surface the error banner (never blank).
 // ---------------------------------------------------------------------------

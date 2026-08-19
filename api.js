@@ -387,13 +387,23 @@ async getQuote(symbol, { type } = {}) {
 normalizeQuote(raw, ticker, meta) {
   const item = (raw && typeof raw === 'object') ? (raw.ticker || raw.data || raw) : (raw || {});
   const symbol = String(ticker || item.symbol || item.ticker || '').toUpperCase();
+  // Alias tables below reflect BOTH the legacy/common quote conventions (camelCase,
+  // Yahoo/Finviz/AlphaVantage-style) AND the real field names published by the
+  // Tickerbot /v2/tickers/{ticker} row — tickerbot.io/docs/schema.json (the live
+  // endpoint returns one flat row whose keys are exactly the schema's bare names:
+  // `price`, `previous_close`, `day_change`, `day_change_pct`, `session_open`,
+  // `session_high`, `session_low`, `volume_today`, `currency_name`, `exchange`,
+  // `exchange_mic`, `market_cap`). Values are only READ when present — never
+  // fabricated — and `price ?? 0` remains as the last-resort fallback (it is the
+  // symptom-carrier, not the bug; the bug was that the real provider field names
+  // were not aliased, so a present price fell through to 0).
   const price = toNumber(item.price ?? item.lastPrice ?? item.last ?? item.close ?? item.c ?? item.regularMarketPrice ?? item.regularMarketLast ?? null);
-  const previousClose = toNumber(item.previousClose ?? item.prevClose ?? item.previousClosePrice ?? item.regularMarketPreviousClose ?? null);
-  const change = toNumber(item.change ?? item.todaysChange ?? (price != null && previousClose != null ? price - previousClose : null));
-  const changePercent = toNumber(item.changePercent ?? item.todaysChangePerc ?? item.changesPercentage ?? item.percentChange ?? item.regularMarketChangePercent ?? null);
+  const previousClose = toNumber(item.previousClose ?? item.prevClose ?? item.previousClosePrice ?? item.previous_close ?? item.regularMarketPreviousClose ?? null);
+  const change = toNumber(item.change ?? item.todaysChange ?? item.day_change ?? (price != null && previousClose != null ? price - previousClose : null));
+  const changePercent = toNumber(item.changePercent ?? item.todaysChangePerc ?? item.changesPercentage ?? item.percentChange ?? item.day_change_pct ?? item.regularMarketChangePercent ?? null);
   const type = resolveType(item, symbol);
-  const currency = item.currency ?? item.quoteCurrency ?? item.currencyCode ?? null;
-  const exchange = item.exchange ?? item.exchangeName ?? item.mic ?? item.fullExchangeName ?? null;
+  const currency = item.currency ?? item.quoteCurrency ?? item.currencyCode ?? item.currency_name ?? null;
+  const exchange = item.exchange ?? item.exchangeName ?? item.mic ?? item.exchange_mic ?? item.fullExchangeName ?? null;
 
   return {
     symbol,
@@ -407,10 +417,10 @@ normalizeQuote(raw, ticker, meta) {
     changePercent: changePercent ?? 0,
     // Back-compat alias: the smoke contract and some UIs read `percentChange`.
     percentChange: changePercent ?? 0,
-    volume: toNumber(item.volume ?? item.v ?? item.regularMarketVolume ?? null) ?? 0,
-    high: toNumber(item.high ?? item.h ?? item.regularMarketDayHigh ?? null) ?? 0,
-    low: toNumber(item.low ?? item.l ?? item.regularMarketDayLow ?? null) ?? 0,
-    open: toNumber(item.open ?? item.o ?? item.regularMarketOpen ?? null) ?? 0,
+    volume: toNumber(item.volume ?? item.v ?? item.volume_today ?? item.min_day_accumulated_volume ?? item.regularMarketVolume ?? null) ?? 0,
+    high: toNumber(item.high ?? item.h ?? item.session_high ?? item.regularMarketDayHigh ?? null) ?? 0,
+    low: toNumber(item.low ?? item.l ?? item.session_low ?? item.regularMarketDayLow ?? null) ?? 0,
+    open: toNumber(item.open ?? item.o ?? item.session_open ?? item.regularMarketOpen ?? null) ?? 0,
     previousClose,
     marketCap: toNumber(item.marketCap ?? item.market_cap ?? item.regularMarketMarketCap ?? null) ?? 0,
     signals: item.signals || {},
