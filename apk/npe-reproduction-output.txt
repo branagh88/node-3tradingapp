@@ -1,0 +1,63 @@
+=== RUNTIME NPE PROBE (REAL HttpRequestHandler.request) ===
+driver=com.getcapacitor.plugin.http.HttpRequestHandler
+url=https://api.tickerbot.io/v2/tickers/AAPL (DUMMY bearer only; real key never used/printed)
+
+== A. EXACT APP REQUEST SHAPE (headers present, params ABSENT, data undefined) ==
+
+===== CASE A-exact-app-shape =====
+RESULT: NullPointerException THROWN => no HTTP response returned
+NPE message: Cannot invoke "com.getcapacitor.JSObject.keys()" because "<parameter1>" is null
+NPE stack (first frames):
+    at com.getcapacitor.plugin.http.HttpRequestHandler$HttpURLConnectionBuilder.setUrlParams(HttpRequestHandler.java:129)
+    at com.getcapacitor.plugin.http.HttpRequestHandler.request(HttpRequestHandler.java:382)
+    at NativeHttpRequestHandlerProbe.run(NativeHttpRequestHandlerProbe.java:59)
+    at NativeHttpRequestHandlerProbe.main(NativeHttpRequestHandlerProbe.java:131)
+A => EXPECTED NPE: PASS
+A full NPE stack:
+      com.getcapacitor.plugin.http.HttpRequestHandler$HttpURLConnectionBuilder.setUrlParams(HttpRequestHandler.java:129)
+      com.getcapacitor.plugin.http.HttpRequestHandler.request(HttpRequestHandler.java:382)
+      NativeHttpRequestHandlerProbe.run(NativeHttpRequestHandlerProbe.java:59)
+      NativeHttpRequestHandlerProbe.main(NativeHttpRequestHandlerProbe.java:131)
+
+===== CASE B-minimal-no-options =====
+RESULT: NullPointerException THROWN => no HTTP response returned
+NPE message: Cannot invoke "com.getcapacitor.JSObject.keys()" because "<parameter1>" is null
+NPE stack (first frames):
+    at com.getcapacitor.plugin.http.HttpRequestHandler$HttpURLConnectionBuilder.setUrlParams(HttpRequestHandler.java:129)
+    at com.getcapacitor.plugin.http.HttpRequestHandler.request(HttpRequestHandler.java:382)
+    at NativeHttpRequestHandlerProbe.run(NativeHttpRequestHandlerProbe.java:59)
+    at NativeHttpRequestHandlerProbe.main(NativeHttpRequestHandlerProbe.java:147)
+B (minimal: params null -> NPE) => EXPECTED NPE: PASS
+
+===== CASE C-sanitized-no-auth =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Missing Authorization: Bearer header.","request_id":"req_c8793c594242da8a2442"}}
+C (sanitized {} defaults, no auth) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE D-sanitized-with-app-headers =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_f162a8c329933dfb2ed7"}}
+D (sanitized + Authorization: Bearer <dummy>) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE E-headers-absent-params-present =====
+RESULT: NullPointerException THROWN => no HTTP response returned
+NPE message: Cannot invoke "com.getcapacitor.JSObject.keys()" because "<parameter1>" is null
+NPE stack (first frames):
+    at com.getcapacitor.plugin.http.CapacitorHttpUrlConnection.setRequestHeaders(CapacitorHttpUrlConnection.java:142)
+    at com.getcapacitor.plugin.http.HttpRequestHandler$HttpURLConnectionBuilder.openConnection(HttpRequestHandler.java:116)
+    at com.getcapacitor.plugin.http.HttpRequestHandler.request(HttpRequestHandler.java:386)
+    at NativeHttpRequestHandlerProbe.run(NativeHttpRequestHandlerProbe.java:59)
+    at NativeHttpRequestHandlerProbe.main(NativeHttpRequestHandlerProbe.java:183)
+E (headers null -> NPE at setRequestHeaders) => EXPECTED NPE: PASS
+
+=== PROBE SUMMARY ===
+PRE-FIX (unpatched @capacitor-community/http@1.4.1 native source):
+A exact-app-shape (params absent): NPE in setUrlParams (params.keys()) before response
+B minimal (no params/headers): NPE in setUrlParams (params.keys())
+C sanitized {} defaults, no auth: real HTTP response (transport ok, server calls for auth)
+D sanitized + app headers: real HTTP response (transport ok)
+E headers absent: NPE in setRequestHeaders (headers.keys())
+NOTE: connectTimeout/readTimeout/data:undefined are NOT the NPE trigger (A/E NPE even with
+      and without them; C/D with only {} defaults + timeouts return real HTTP).
+failures=0
+probe_exit=0

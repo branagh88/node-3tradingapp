@@ -1,0 +1,42 @@
+=== RUNTIME NPE PROBE (REAL HttpRequestHandler.request) ===
+driver=com.getcapacitor.plugin.http.HttpRequestHandler
+url=https://api.tickerbot.io/v2/tickers/AAPL (DUMMY bearer only; real key never used/printed)
+
+== A. EXACT APP REQUEST SHAPE (headers present, params ABSENT, data undefined) ==
+
+===== CASE A-exact-app-shape =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_2e46762b63c8ecb676cd"}}
+A (post-fix: params null is guarded -> real HTTP) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE B-minimal-no-options =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Missing Authorization: Bearer header.","request_id":"req_01fd65719524498f3a73"}}
+B (post-fix: minimal -> real HTTP) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE C-sanitized-no-auth =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Missing Authorization: Bearer header.","request_id":"req_c316a3a9f18ffa7ba113"}}
+C (sanitized {} defaults, no auth) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE D-sanitized-with-app-headers =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_ec08f73d64e6f73ad7ca"}}
+D (sanitized + Authorization: Bearer <dummy>) => EXPECTED real HTTP response: PASS (status 401)
+
+===== CASE E-headers-absent-params-present =====
+RESULT: completed without NPE, HTTP status=401
+RESULT: body={_raw={"error":"unauthenticated","message":"Missing Authorization: Bearer header.","request_id":"req_5e7692bd7cb62ce43825"}}
+E (post-fix: headers null is guarded -> real HTTP) => EXPECTED real HTTP response: PASS (status 401)
+
+=== PROBE SUMMARY ===
+POST-FIX (Java null-guards + JS options sanitizer applied):
+A exact-app-shape (params absent): real HTTP response (NPE gone) -> PASS
+B minimal (url+method only): real HTTP response (NPE gone) -> PASS
+C sanitized {} defaults, no auth: real HTTP 401 -> transport ok
+D sanitized + app headers: real HTTP 401 -> transport ok
+E headers absent: real HTTP response (NPE gone) -> PASS
+Every case returns a REAL HTTP response from api.tickerbot.io; 401 for the
+DUMMY/unauthenticated bearer proves network transport (auth/permission gate).
+failures=0
+probe_exit=0
