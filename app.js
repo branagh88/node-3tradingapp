@@ -260,6 +260,25 @@ async function testConnection() {
      </div>
    `;
  } catch (err) {
+   // Diagnostics: log the exact request dispatched and the full thrown error
+   // (including any err.cause from the native HTTP plugin) so a connection
+   // failure can be classified as DNS vs SSL vs CORS vs timeout.
+   console.error('[testConnection] request dispatched', {
+     url: `${String(baseURL).replace(/\/+$/, '')}/v2/tickers/AAPL`,
+     method: 'GET',
+     headers: {
+       Accept: 'application/json',
+       'Content-Type': 'application/json',
+       ...(apiKey ? { Authorization: 'Bearer <redacted>' } : {}),
+     },
+   });
+   console.error('[testConnection] full error', {
+     name: err && err.name,
+     message: err && err.message,
+     stack: err && err.stack,
+     status: err && err.status,
+     cause: err && err.cause,
+   });
    resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
        <strong>CONNECTION FAILED</strong><br>
