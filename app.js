@@ -302,11 +302,35 @@ async function testConnection() {
        ).join('') +
        `</div>`
      : '';
+   // TEMP-DIAGNOSTIC (revert later): surface the REAL native failure fields on
+   // the Settings diagnostic screen. Never prints the API key.
+   const causeObj = err && err.cause && typeof err.cause === 'object' ? err.cause : null;
+   const causeBits = causeObj
+     ? ['name', 'message', 'code', 'errorCode', 'errorMessage', 'url', 'status']
+         .filter((k) => causeObj[k] != null)
+         .map((k) => `<code>${esc(k)}</code>: ${esc(String(causeObj[k]))}`)
+     : [];
+   let capState = '';
+   try {
+     const cap = globalThis.Capacitor;
+     const capNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+     const hdrs = cap && Array.isArray(cap.PluginHeaders) ? cap.PluginHeaders : [];
+     const httpHeader = !!(hdrs.find((h) => h && h.name === 'Http'));
+     console.log('[app:temp] testConnection failed', { isNative: capNative, nativeHttpPluginHeader: httpHeader, cause: causeObj });
+     capState = `<div style="font-size:11px;opacity:.8;">native=${capNative}; native-Http-plugin-header=${httpHeader ? 'present' : 'MISSING'}</div>`;
+   } catch (e) {
+     capState = '';
+   }
+   const causeHtml = causeBits.length
+     ? `<div style="margin-top:6px;font-size:12px;"><strong>TEMP native cause:</strong> ${causeBits.join(' · ')}</div>`
+     : '';
    resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
        <strong>CONNECTION FAILED</strong><br>
        Error: ${esc(err.message || String(err))}<br>
        Status: ${err.status || 'N/A'}
+       ${causeHtml}
+       ${capState}
        ${perStrategy}
      </div>
    `;
