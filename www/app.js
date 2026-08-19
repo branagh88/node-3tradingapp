@@ -224,8 +224,11 @@ function fillSettingsForm() {
  set('stockEndpoint', cfg.stockEndpoint);
  set('cryptoEndpoint', cfg.cryptoEndpoint);
  set('wsEndpoint', cfg.wsEndpoint);
+ set('proxyUrl', (cfg.settings && cfg.settings.proxyUrl) || '');
  const capSearch = document.querySelector('[name="capabilitiesSearch"]');
  if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
+ const useProxy = document.querySelector('[name="useProxy"]');
+ if (useProxy) useProxy.checked = !cfg.settings || cfg.settings.useProxy !== false;
 }
 
 async function testConnection() {
@@ -233,8 +236,12 @@ async function testConnection() {
  const cfg = loadConfig();
  const elBase = document.querySelector('[name="baseURL"]');
  const elKey = document.querySelector('[name="apiKey"]');
+ const elUseProxy = document.querySelector('[name="useProxy"]');
+ const elProxyUrl = document.querySelector('[name="proxyUrl"]');
  const baseURL = elBase ? elBase.value.trim() : cfg.baseURL;
  const apiKey = elKey ? elKey.value.trim() : cfg.apiKey;
+ const useProxy = elUseProxy ? elUseProxy.checked : (!cfg.settings || cfg.settings.useProxy !== false);
+ const proxyUrl = elProxyUrl ? elProxyUrl.value.trim() : ((cfg.settings && cfg.settings.proxyUrl) || '');
  
  if (!baseURL) {
    resultEl.hidden = false;
@@ -247,17 +254,30 @@ async function testConnection() {
  resultEl.className = 'settings-test-result';
  resultEl.innerHTML = 'Testing Tickerbot API connection...<br>';
 
- const testApi = new TickerbotAPI({ baseURL, apiKey });
+ // Pass the form's live CORS settings through so the test exercises exactly
+ // what the user just configured (proxy on/off, custom proxy URL).
+ const testApi = new TickerbotAPI({
+   baseURL,
+   apiKey,
+   settings: { ...(cfg.settings || {}), useProxy, proxyUrl, timeoutMs: (cfg.settings && cfg.settings.timeoutMs) || 10000 },
+ });
  
  try {
    const res = await testApi.getTickerQuote('AAPL');
+   const debug = res._debug || {};
+   const strategy = debug.strategy || 'direct';
+   const priorFailures = debug.strategyErrors || [];
+   const fallbackNote = priorFailures.length
+     ? `<div style="margin-top:6px;font-size:12px;opacity:.85;">Tried ${priorFailures.length} earlier strategy(ies) that failed: ${priorFailures.map(f => `<code>${esc(f.strategy)}</code> — ${esc(f.message)}`).join('; ')}</div>`
+     : '';
    resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid green; padding-left: 8px;">
        <strong>CONNECTION SUCCESSFUL</strong><br>
-       Endpoint: <code>${res._debug.url}</code><br>
+       Strategy/Proxy: <code>${esc(strategy)}</code><br>
+       Endpoint: <code>${esc(debug.url || '')}</code><br>
        Status: 200 OK<br>
-       Symbol: ${res.symbol} | Price: ${res.price}
-     </div>
+       Symbol: ${esc(res.symbol)} | Price: ${esc(res.price)}
+     </div>${fallbackNote}
    `;
  } catch (err) {
    // Diagnostics: log the exact request dispatched and the full thrown error
@@ -271,6 +291,8 @@ async function testConnection() {
        'Content-Type': 'application/json',
        ...(apiKey ? { Authorization: 'Bearer <redacted>' } : {}),
      },
+     useProxy,
+     proxyUrl: proxyUrl || '(default services)',
    });
    console.error('[testConnection] full error', {
      name: err && err.name,
@@ -278,12 +300,24 @@ async function testConnection() {
      stack: err && err.stack,
      status: err && err.status,
      cause: err && err.cause,
+     strategyErrors: err && err.strategyErrors,
    });
+   // Per-strategy breakdown replaces the generic 'NETWORK OR CORS ERROR' so
+   // the user can see exactly which proxy/strategy failed and why.
+   const perStrategy = (err.strategyErrors && err.strategyErrors.length)
+     ? `<div style="margin-top:8px;font-size:12px;">` +
+       `<div style="margin-bottom:4px;"><strong>Strategies tried:</strong></div>` +
+       err.strategyErrors.map(e =>
+         `<div style="padding:2px 0;">• <code>${esc(e.strategy)}</code>: ${esc(e.message)}</div>`
+       ).join('') +
+       `</div>`
+     : '';
    resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
        <strong>CONNECTION FAILED</strong><br>
-       Error: ${err.message}<br>
+       Error: ${esc(err.message || String(err))}<br>
        Status: ${err.status || 'N/A'}
+       ${perStrategy}
      </div>
    `;
  }
@@ -302,6 +336,8 @@ function wireSettings() {
      const elStock = document.querySelector('[name="stockEndpoint"]');
      const elCrypto = document.querySelector('[name="cryptoEndpoint"]');
      const elWs = document.querySelector('[name="wsEndpoint"]');
+     const elUseProxy = document.querySelector('[name="useProxy"]');
+     const elProxyUrl = document.querySelector('[name="proxyUrl"]');
      const capSearch = document.querySelector('[name="capabilitiesSearch"]');
      const clean = (el) => (el ? el.value.trim() || undefined : undefined);
 
@@ -319,7 +355,9 @@ function wireSettings() {
        },
        settings: {
          ...cfg.settings,
-         pollInterval: elPoll ? Number(elPoll.value) || 30 : cfg.settings.pollInterval
+         pollInterval: elPoll ? Number(elPoll.value) || 30 : cfg.settings.pollInterval,
+         useProxy: elUseProxy ? elUseProxy.checked : (cfg.settings.useProxy !== false),
+         proxyUrl: elProxyUrl ? elProxyUrl.value.trim() : (cfg.settings.proxyUrl || '')
        }
      };
      saveConfig(newCfg);
