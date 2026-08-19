@@ -7,7 +7,11 @@
   "scripts": {
     "build": "node build-check.mjs",
     "smoke": "node tests/smoke.mjs",
-    "test:boot": "node tests/boot-harness.mjs"
+    "test:boot": "node tests/boot-harness.mjs",
+    "dev": "node server.mjs",
+    "serve": "node server.mjs",
+    "build:http": "esbuild www/vendor/http-plugin.src.mjs --bundle --format=esm --platform=browser --target=es2020 --minify --outfile=www/vendor/http-plugin.js --sourcemap",
+    "postinstall": "node scripts/patch-http-plugin-gradle.mjs"
   },
   "main": "Marketanalysis.js",
   "directories": {
@@ -25,11 +29,13 @@
   },
   "homepage": "https://github.com/branagh88/node-3tradingapp#readme",
   "dependencies": {
+    "@capacitor-community/http": "^1.4.1",
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "jsdom": "^30.0.1"
   }
 }

@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { sma, ema, rsi, INDICATORS } from '../indicators.js';
-import { MarketAPI } from '../api.js';
+import { MarketAPI, resolveBaseURL } from '../api.js';
 import { loadConfig, saveConfig, isConfigured, API_CONFIG } from '../config.js';
 import { storage } from '../storage.js';
 
@@ -121,7 +121,29 @@ const api3 = new MarketAPI({ baseURL: 'https://api.example.com/', apiKey: '', st
 ok('effectivePath full-path endpoint wins', api3.effectivePath('quote', api3.config.stockEndpoint) === 'https://api.example.com/v1/stock/quote');
 
 // ---------------------------------------------------------------------------
-// 4. Config + storage round-trip (localStorage shim for Node)
+// 4. Origin resolver — same-origin dev proxy routing (CORS fix)
+// ---------------------------------------------------------------------------
+console.log('origin resolver:');
+const localLoc = { hostname: 'localhost', protocol: 'http:', origin: 'http://localhost:3000' };
+ok('resolveBaseURL localhost -> same origin', resolveBaseURL('https://api.tickerbot.io', localLoc) === 'http://localhost:3000');
+ok('resolveBaseURL 127.0.0.1 -> same origin', resolveBaseURL('https://api.tickerbot.io', { hostname: '127.0.0.1', protocol: 'http:', origin: 'http://127.0.0.1:3000' }) === 'http://127.0.0.1:3000');
+ok('resolveBaseURL [::1] -> same origin', resolveBaseURL('https://api.tickerbot.io', { hostname: '[::1]', protocol: 'http:', origin: 'http://[::1]:3000' }) === 'http://[::1]:3000');
+const remoteLoc = { hostname: 'stackblitz.io', protocol: 'https:', origin: 'https://example.stackblitz.io' };
+ok('resolveBaseURL non-local origin keeps absolute API URL', resolveBaseURL('https://api.tickerbot.io', remoteLoc) === 'https://api.tickerbot.io');
+ok('resolveBaseURL no location keeps base', resolveBaseURL('https://api.tickerbot.io') === 'https://api.tickerbot.io');
+
+// End-to-end: buildUrl honours the resolver in both directions.
+const prevLocation = globalThis.location;
+globalThis.location = localLoc;
+const devApi = new MarketAPI({ baseURL: 'https://api.tickerbot.io', apiKey: '' });
+ok('buildUrl on localhost -> same-origin /v2 path', devApi.buildUrl('/v2/tickers/AAPL') === 'http://localhost:3000/v2/tickers/AAPL');
+if (prevLocation === undefined) delete globalThis.location;
+else globalThis.location = prevLocation;
+const prodApi = new MarketAPI({ baseURL: 'https://api.tickerbot.io', apiKey: '' });
+ok('buildUrl on non-local origin -> absolute API URL', prodApi.buildUrl('/v2/tickers/AAPL') === 'https://api.tickerbot.io/v2/tickers/AAPL');
+
+// ---------------------------------------------------------------------------
+// 5. Config + storage round-trip (localStorage shim for Node)
 // ---------------------------------------------------------------------------
 console.log('config/storage:');
 if (typeof localStorage === 'undefined') {
