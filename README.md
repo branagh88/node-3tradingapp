@@ -2,9 +2,41 @@
 
 [Edit in StackBlitz next generation editor ⚡️](https://stackblitz.com/~/github.com/branagh88/node-3tradingapp)
 
+## Quick start (local dev proxy)
+
+The repo ships a tiny zero-dependency Node dev server (`server.mjs`) that serves
+this vanilla-ES-modules app AND reverse-proxies every `/v2` / `/v2/...` request
+to `https://api.tickerbot.io` — so browser fetches stay same-origin and bypass
+the API's CORS restrictions.
+
+```bash
+npm install
+npm run dev        # starts server.mjs on http://localhost:3000 (PORT env overrides)
+```
+
+Then open **http://localhost:3000**. The dev proxy:
+
+- serves static files from the repo root (index.html fallback for the hash router;
+  never serves `node_modules/`, `.git/`, `adws/`, `.workbench/`);
+- forwards `/v2*` to `api.tickerbot.io` with the same path + query and method
+  (GET/POST), streaming the request body for POST, forwarding
+  `Origin`/`Authorization`/`Content-Type` (dropping `Host`), and adding CORS
+  headers (`Access-Control-Allow-Origin: *`; OPTIONS preflight answered 204);
+- when the app is served from `localhost`/`127.0.0.1`/`::1`/`[::1]`,
+  `api.js` routes API calls to the same origin (e.g.
+  `http://localhost:3000/v2/tickers/AAPL`); every other origin (Capacitor,
+  StackBlitz, static hosting) keeps calling `https://api.tickerbot.io` directly.
+
+`npm run serve` is an alias for `npm run dev`.
+
 ## CORS & Tickerbot API
 
-Live browser calls from StackBlitz to https://api.tickerbot.io are subject to CORS and could not be verified from this offline tree. The app surfaces network/CORS failures gracefully (NETWORK OR CORS ERROR / UNAVAILABLE states) and deliberately includes NO fake proxy or mock. A local dev proxy pass-through (e.g. a Vite devServer proxy or a tiny Node server forwarding to api.tickerbot.io) is the intended workaround — it is not part of this repo.
+Live browser calls to `https://api.tickerbot.io` are subject to CORS; the app
+surfaces network/CORS failures gracefully (NETWORK OR CORS ERROR / UNAVAILABLE
+states). The local dev proxy above is the intended workaround for local
+development. Inside the Capacitor native shell, `_doFetch` routes requests
+through `@capacitor-community/http` (native HTTP) so mobile calls bypass
+WebView CORS; plain browsers always use `window.fetch`.
 
 ## Troubleshooting: StackBlitz console errors (non-issues)
 

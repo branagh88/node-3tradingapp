@@ -12,6 +12,33 @@ import { logger } from './utils.js';
 const DEFAULT_BASE_URL = 'https://api.tickerbot.io';
 const PLACEHOLDER_BASE_URL = 'YOUR_API_BASE_URL';
 
+// Hostnames served by the tiny Node dev proxy at the repo root (server.mjs,
+// `npm run dev`). When the app runs on one of these, browser fetches must go
+// to the SAME origin so server.mjs can forward /v2/* to api.tickerbot.io and
+// bypass the API's CORS restrictions. Every other origin (Capacitor native,
+// StackBlitz, static hosting) keeps calling the absolute API base directly.
+const LOCAL_DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+// Is `loc` (defaults to globalThis.location in the browser) a local dev
+// origin that should route API calls through the same-origin proxy?
+export function isLocalDevOrigin(loc) {
+  const target = loc || globalThis.location;
+  if (!target || typeof target.hostname !== 'string') return false;
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
+  return LOCAL_DEV_HOSTNAMES.has(target.hostname);
+}
+
+// Resolve the effective API base for the current runtime: on local dev
+// origins use location.origin (the dev proxy), everywhere else keep the
+// configured/absolute API base untouched.
+export function resolveBaseURL(base, loc) {
+  if (isLocalDevOrigin(loc)) {
+    const origin = (loc || globalThis.location).origin;
+    if (origin) return String(origin).replace(/\/+$/, '');
+  }
+  return base;
+}
+
 // kind -> default Tickerbot path segment (used by effectivePath when no
 // explicit endpoint override is configured).
 const KIND_ENDPOINTS = {
@@ -104,7 +131,10 @@ buildUrl(path) {
     ? String(rawBase).replace(/\/+$/, '')
     : DEFAULT_BASE_URL;
   const endpoint = String(path).replace(/^\/+/, '');
-  return `${base}/${endpoint}`;
+  // Normalization intact: base and endpoint are both single-slash joined.
+  // On local dev origins the base is swapped for location.origin so the
+  // request hits the same-origin proxy (server.mjs) instead of the API.
+  return `${resolveBaseURL(base)}/${endpoint}`;
 }
 
 // Resolve a logical endpoint kind ("quote", "candles", "search", "scan", …)
@@ -122,6 +152,7 @@ async _doFetch(path, options = {}) {
   const timer = setTimeout(() => controller.abort(), this.timeoutMs);
   const finalUrl = this.buildUrl(path);
   const safeUrl = finalUrl;
+  const method = options.method || 'GET';
 
   const headers = {
     'Accept': 'application/json',
@@ -132,14 +163,41 @@ async _doFetch(path, options = {}) {
     headers['Authorization'] = `Bearer ${this.config.apiKey.trim()}`;
   }
 
+  // Inside the Capacitor native shell (Android APK) the WebView cannot issue
+  // CORS-free cross-origin fetches, so route through @capacitor-community/http
+  // (native HTTP). The plugin is imported lazily so plain browsers never load
+  // it; every non-native runtime keeps using window.fetch.
+  const isNative = !!(
+    globalThis.Capacitor &&
+    typeof globalThis.Capacitor.isNativePlatform === 'function' &&
+    globalThis.Capacitor.isNativePlatform()
+  );
+
   let response;
   try {
-    response = await fetch(finalUrl, {
-      method: options.method || 'GET',
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal,
-    });
+    if (isNative) {
+      const { Http } = await import('@capacitor-community/http');
+      const nativeRes = await Http.request({
+        url: finalUrl,
+        method,
+        headers,
+        data: options.body || undefined,
+        connectTimeout: this.timeoutMs,
+        readTimeout: this.timeoutMs,
+      });
+      response = {
+        status: nativeRes.status,
+        ok: nativeRes.status >= 200 && nativeRes.status < 300,
+        json: async () => (typeof nativeRes.data === 'string' ? JSON.parse(nativeRes.data) : nativeRes.data),
+      };
+    } else {
+      response = await fetch(finalUrl, {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+    }
   } catch (err) {
     if (err.name === 'AbortError') throw new ApiError('timeout', 'Request timed out', 0);
     throw new ApiError('network', 'NETWORK OR CORS ERROR', 0);
