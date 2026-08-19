@@ -164,20 +164,25 @@ async _doFetch(path, options = {}) {
   }
 
   // Inside the Capacitor native shell (Android APK) the WebView cannot issue
-  // CORS-free cross-origin fetches, so route through @capacitor-community/http
-  // (native HTTP). The plugin is imported lazily so plain browsers never load
-  // it; every non-native runtime keeps using window.fetch.
+  // CORS-free cross-origin fetches, so route through CapacitorHttp (the native
+  // HTTP plugin bundled with @capacitor/core). It is imported lazily so plain
+  // browsers never load it; every non-native runtime keeps using window.fetch.
   const isNative = !!(
     globalThis.Capacitor &&
     typeof globalThis.Capacitor.isNativePlatform === 'function' &&
     globalThis.Capacitor.isNativePlatform()
   );
 
+  // Log the exact dispatch for diagnostics (never the raw Authorization value).
+  const logHeaders = { ...headers };
+  if (logHeaders['Authorization']) logHeaders['Authorization'] = 'Bearer <redacted>';
+  console.debug(`[api] dispatch ${method} ${safeUrl}`, { headers: logHeaders });
+
   let response;
   try {
     if (isNative) {
-      const { Http } = await import('./vendor/http-plugin.js');
-      const nativeRes = await Http.request({
+      const { CapacitorHttp } = await import('@capacitor/core');
+      const nativeRes = await CapacitorHttp.request({
         url: finalUrl,
         method,
         headers,
@@ -200,7 +205,25 @@ async _doFetch(path, options = {}) {
     }
   } catch (err) {
     if (err.name === 'AbortError') throw new ApiError('timeout', 'Request timed out', 0);
-    throw new ApiError('network', 'NETWORK OR CORS ERROR', 0);
+    // Preserve + log the FULL original error (name, message, stack, cause, and
+    // native plugin error fields) so callers can distinguish a DNS failure from
+    // an SSL handshake failure from a blocked WebView request. Throw a NEW
+    // ApiError but attach the original as `cause` for downstream inspection.
+    console.error(`[api] ${method} ${safeUrl} failed`, {
+      name: err && err.name,
+      message: err && err.message,
+      stack: err && err.stack,
+      cause: err && err.cause,
+      code: err && err.code,
+      errorCode: err && err.errorCode,
+      errorMessage: err && err.errorMessage,
+      url: err && err.url,
+      status: err && err.status,
+      body: err && err.body,
+    });
+    const apiErr = new ApiError('network', 'NETWORK OR CORS ERROR', 0);
+    apiErr.cause = err;
+    throw apiErr;
   } finally {
     clearTimeout(timer);
   }
