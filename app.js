@@ -224,11 +224,8 @@ function fillSettingsForm() {
  set('stockEndpoint', cfg.stockEndpoint);
  set('cryptoEndpoint', cfg.cryptoEndpoint);
  set('wsEndpoint', cfg.wsEndpoint);
- set('proxyUrl', (cfg.settings && cfg.settings.proxyUrl) || '');
  const capSearch = document.querySelector('[name="capabilitiesSearch"]');
  if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
- const useProxy = document.querySelector('[name="useProxy"]');
- if (useProxy) useProxy.checked = !cfg.settings || cfg.settings.useProxy !== false;
 }
 
 async function testConnection() {
@@ -236,12 +233,8 @@ async function testConnection() {
  const cfg = loadConfig();
  const elBase = document.querySelector('[name="baseURL"]');
  const elKey = document.querySelector('[name="apiKey"]');
- const elUseProxy = document.querySelector('[name="useProxy"]');
- const elProxyUrl = document.querySelector('[name="proxyUrl"]');
  const baseURL = elBase ? elBase.value.trim() : cfg.baseURL;
  const apiKey = elKey ? elKey.value.trim() : cfg.apiKey;
- const useProxy = elUseProxy ? elUseProxy.checked : (!cfg.settings || cfg.settings.useProxy !== false);
- const proxyUrl = elProxyUrl ? elProxyUrl.value.trim() : ((cfg.settings && cfg.settings.proxyUrl) || '');
  
  if (!baseURL) {
    resultEl.hidden = false;
@@ -254,12 +247,11 @@ async function testConnection() {
  resultEl.className = 'settings-test-result';
  resultEl.innerHTML = 'Testing Tickerbot API connection...<br>';
 
- // Pass the form's live CORS settings through so the test exercises exactly
- // what the user just configured (proxy on/off, custom proxy URL).
+ // Tickerbot calls always route through our same-origin proxy (server.mjs).
  const testApi = new TickerbotAPI({
    baseURL,
    apiKey,
-   settings: { ...(cfg.settings || {}), useProxy, proxyUrl, timeoutMs: (cfg.settings && cfg.settings.timeoutMs) || 10000 },
+   settings: { ...(cfg.settings || {}), timeoutMs: (cfg.settings && cfg.settings.timeoutMs) || 10000 },
  });
  
  try {
@@ -291,8 +283,6 @@ async function testConnection() {
        'Content-Type': 'application/json',
        ...(apiKey ? { Authorization: 'Bearer <redacted>' } : {}),
      },
-     useProxy,
-     proxyUrl: proxyUrl || '(default services)',
    });
    console.error('[testConnection] full error', {
      name: err && err.name,
@@ -336,8 +326,6 @@ function wireSettings() {
      const elStock = document.querySelector('[name="stockEndpoint"]');
      const elCrypto = document.querySelector('[name="cryptoEndpoint"]');
      const elWs = document.querySelector('[name="wsEndpoint"]');
-     const elUseProxy = document.querySelector('[name="useProxy"]');
-     const elProxyUrl = document.querySelector('[name="proxyUrl"]');
      const capSearch = document.querySelector('[name="capabilitiesSearch"]');
      const clean = (el) => (el ? el.value.trim() || undefined : undefined);
 
@@ -356,8 +344,6 @@ function wireSettings() {
        settings: {
          ...cfg.settings,
          pollInterval: elPoll ? Number(elPoll.value) || 30 : cfg.settings.pollInterval,
-         useProxy: elUseProxy ? elUseProxy.checked : (cfg.settings.useProxy !== false),
-         proxyUrl: elProxyUrl ? elProxyUrl.value.trim() : (cfg.settings.proxyUrl || '')
        }
      };
      saveConfig(newCfg);

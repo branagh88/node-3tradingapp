@@ -129,7 +129,9 @@ ok('resolveBaseURL localhost -> same origin', resolveBaseURL('https://api.ticker
 ok('resolveBaseURL 127.0.0.1 -> same origin', resolveBaseURL('https://api.tickerbot.io', { hostname: '127.0.0.1', protocol: 'http:', origin: 'http://127.0.0.1:3000' }) === 'http://127.0.0.1:3000');
 ok('resolveBaseURL [::1] -> same origin', resolveBaseURL('https://api.tickerbot.io', { hostname: '[::1]', protocol: 'http:', origin: 'http://[::1]:3000' }) === 'http://[::1]:3000');
 const remoteLoc = { hostname: 'stackblitz.io', protocol: 'https:', origin: 'https://example.stackblitz.io' };
-ok('resolveBaseURL non-local origin keeps absolute API URL', resolveBaseURL('https://api.tickerbot.io', remoteLoc) === 'https://api.tickerbot.io');
+// Every non-native web origin now routes through our same-origin proxy, not
+// just localhost — so a remote browser origin must also resolve to location.origin.
+ok('resolveBaseURL non-local origin -> same origin (proxy for all web origins)', resolveBaseURL('https://api.tickerbot.io', remoteLoc) === 'https://example.stackblitz.io');
 ok('resolveBaseURL no location keeps base', resolveBaseURL('https://api.tickerbot.io') === 'https://api.tickerbot.io');
 
 // End-to-end: buildUrl honours the resolver in both directions.
