@@ -5,8 +5,10 @@
 //   1. Serves the static files from the repo root (index.html + ES modules).
 //   2. Reverse-proxies every request whose path is exactly /v2 or starts with
 //      /v2/ to https://api.tickerbot.io (same path + query, same method),
-//      forwarding the caller's Origin/Authorization/Content-Type headers
-//      (dropping Host) and streaming the request body for POST.
+//      forwarding the caller's Authorization/Content-Type/Accept headers and
+//      streaming the request body for POST. The browser's Host AND Origin are
+//      intentionally dropped (see handleProxy) so upstream never sees our page
+//      origin — api.tickerbot.io rejects unallowed origins with cors_origin_denied.
 //
 // Browser fetches therefore go to http://localhost:3000/... (same origin, no
 // CORS) and server.mjs re-attaches the API key header upstream.
@@ -122,8 +124,13 @@ function handleProxy(req, res, pathname, search) {
   const targetUrl = `${API_TARGET}${pathname}${search}`;
   const headers = {};
   // Forward the caller's identity/body headers. Host is intentionally dropped
-  // so the upstream request's Host is api.tickerbot.io, not localhost.
-  for (const name of ['origin', 'authorization', 'content-type', 'accept']) {
+  // so the upstream request's Host is api.tickerbot.io, not localhost. The
+  // browser's Origin header is ALSO intentionally NOT forwarded: api.tickerbot.io
+  // rejects any origin not on its CORS allowlist with `cors_origin_denied`
+  // (403), so leaking our page origin upstream would break the proxy. This is
+  // a server-side reverse proxy — upstream must see no browser Origin. The
+  // Authorization (Bearer key) IS forwarded so the API can authenticate.
+  for (const name of ['authorization', 'content-type', 'accept']) {
     const value = req.headers[name];
     if (value !== undefined) headers[name] = value;
   }
