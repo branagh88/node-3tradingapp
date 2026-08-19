@@ -19,9 +19,24 @@ const PLACEHOLDER_BASE_URL = 'YOUR_API_BASE_URL';
 // StackBlitz, static hosting) keeps calling the absolute API base directly.
 const LOCAL_DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
+// True when running inside the Capacitor native shell (Android APK / iOS).
+// The Capacitor WebView is served from https://localhost, which would
+// otherwise be mistaken for a local dev origin — and the same-origin dev
+// proxy (server.mjs) does not exist inside the app. On native we must keep
+// the absolute API base so requests reach api.tickerbot.io via the native
+// HTTP plugin (capacitor native HTTP is the ONE active proxy workaround).
+function isNativeRuntime() {
+  return !!(
+    globalThis.Capacitor &&
+    typeof globalThis.Capacitor.isNativePlatform === 'function' &&
+    globalThis.Capacitor.isNativePlatform()
+  );
+}
+
 // Is `loc` (defaults to globalThis.location in the browser) a local dev
 // origin that should route API calls through the same-origin proxy?
 export function isLocalDevOrigin(loc) {
+  if (isNativeRuntime()) return false;
   const target = loc || globalThis.location;
   if (!target || typeof target.hostname !== 'string') return false;
   if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
@@ -164,14 +179,14 @@ async _doFetch(path, options = {}) {
   }
 
   // Inside the Capacitor native shell (Android APK) the WebView cannot issue
-  // CORS-free cross-origin fetches, so route through CapacitorHttp (the native
-  // HTTP plugin bundled with @capacitor/core). It is imported lazily so plain
-  // browsers never load it; every non-native runtime keeps using window.fetch.
-  const isNative = !!(
-    globalThis.Capacitor &&
-    typeof globalThis.Capacitor.isNativePlatform === 'function' &&
-    globalThis.Capacitor.isNativePlatform()
-  );
+  // CORS-free cross-origin fetches, so route through the native HTTP plugin
+  // (@capacitor-community/http, registered in android/capacitor.plugins.json
+  // and bundled with esbuild into ./vendor/http-plugin.js — see
+  // www/vendor/http-plugin.src.mjs and `npm run build:http`). The bundle has
+  // no bare specifiers, so the dynamic import resolves inside the WebView
+  // (which has no node_modules). It is imported lazily so plain browsers
+  // never load it; every non-native runtime keeps using window.fetch.
+  const isNative = isNativeRuntime();
 
   // Log the exact dispatch for diagnostics (never the raw Authorization value).
   const logHeaders = { ...headers };
@@ -181,8 +196,8 @@ async _doFetch(path, options = {}) {
   let response;
   try {
     if (isNative) {
-      const { CapacitorHttp } = await import('@capacitor/core');
-      const nativeRes = await CapacitorHttp.request({
+      const { Http } = await import('./vendor/http-plugin.js');
+      const nativeRes = await Http.request({
         url: finalUrl,
         method,
         headers,
