@@ -388,3 +388,113 @@ Verified the APK's bundled assets are byte-identical to `www/` (sha256 IDENTICAL
   surfaced on Settings diagnostic screen).
 These are marked `TEMP-DIAGNOSTIC (revert later)` and are safe to revert by removing the
 marked blocks after on-device confirmation on the studio machine.
+
+---
+
+## FINAL — direct answers to the two open questions
+
+### Q1. Exactly why is the Android request failing (NETWORK OR CORS ERROR / Status N/A)?
+
+The symptom does **not** come from the native HTTP path — it comes from the WebView
+`window.fetch` fallback being CORS-blocked by `api.tickerbot.io`:
+
+1. The WebView runs the app at `https://localhost` (Capacitor `androidScheme: https`).
+2. `www/api.js` `_doFetch` (line 182) picks the native branch only when
+   `isNativeRuntime()` (line 21) is true AND `Http.request` is still bound to the
+   native bridge at call time. If the plugin binding is ever missing/regressed, the
+   request falls through to `HttpWeb` → plain `window.fetch` against the API origin.
+3. `api.tickerbot.io` sends **no `Access-Control-Allow-Origin`** for the WebView origin:
+   a keyless probe with `Origin: https://localhost` returns
+   `HTTP 403 {"error":"cors_origin_denied",...}` (see `apk/keyless_api_probe.txt`).
+   The CORS check happens **before auth**, so it blocks regardless of key validity.
+4. The blocked fetch surfaces as status **0** → `www/api.js` line 305 maps it to
+   `ApiError('network', 'NETWORK OR CORS ERROR', 0)` → Settings shows "Status: N/A".
+
+Proof the native path is fine: the native bridge (bundled
+`assets/capacitor.plugins.json` → `com.getcapacitor.plugin.http.Http`, confirmed in
+`classes7.dex` via `apk/native_classes_in_dex.txt`) sends **no Origin header** and was
+driven against the live server with the real `CapacitorHttpUrlConnection` harness —
+it returned a **real HTTP 401** `{"error":"unauthenticated","message":"Malformed API
+key. Expected tb_test_* or tb_live_*.",...}` for a dummy Bearer (see
+`apk/native-probe-output.txt`). That proves reachability; only a valid `tb_test_*` /
+`tb_live_*` key is missing for a 200. (Authorization is always logged as
+`Bearer <redacted>` — the real key is never printed anywhere.)
+
+**On-device logcat capture is not possible in this environment**: this box has no adb
+device, no emulator, and no AVD. The native path was instead verified via the real
+`CapacitorHttpUrlConnection` harness plus a real server response, and the DEX/bundled-
+plugin evidence above.
+
+### Q2. What file:line needs to be changed?
+
+**No change is required for the current APK** — it is correct. The two spots to keep
+as-is / guard in any future build:
+
+- `www/api.js` → `isNativeRuntime()` **line 21** (must detect the Capacitor native
+  shell) and `_doFetch` native branch **lines 241–257**:
+  ```js
+  if (isNative) {
+    strategy = 'native';                       // line 241 (TEMP marker)
+    const { Http } = await import('./vendor/http-plugin.js');
+    const nativeRes = await Http.request({ url: finalUrl, method, headers, ... }); // 243–250
+  }
+  ```
+  **Guard here**: `Http.request` must stay bound to the native bridge (present iff
+  `Capacitor.PluginHeaders` contains an `Http` header — guaranteed in this APK by
+  `assets/capacitor.plugins.json` + the DEX class). Never let it silently fall back to
+  `HttpWeb`/`window.fetch`; that fallback is the only path that can produce the
+  CORS-blocked status 0.
+- `www/app.js` → `testConnection()` **line 231** (surfaces the error; TEMP diagnostics
+  at **305** and **~325** show real native failure fields — useful until the device
+  run confirms the 401/200 split on-device).
+
+If the user still sees "NETWORK OR CORS ERROR / Status: N/A" on-device after installing
+this APK, the cause is the WebView fallback in `www/api.js` `_doFetch` (lines 241–257)
+having been rebound to `HttpWeb` — verify `Capacitor.PluginHeaders` contains `Http` and
+that `com.getcapacitor.plugin.http.Http` is in the DEX (both already confirmed for this
+APK). Then supply a valid `tb_test_*`/`tb_live_*` API key in Settings.
+
+---
+
+## FACTORY COMPLETION NOTE (this pass — artifacts verified at real paths)
+
+**Date:** 2026-08-19 (factory rerun · task: finish report + emit valid envelope)
+
+### Artifacts verified on disk (all exist, non-empty, md5-identical)
+- `apk/market-intelligence-debug.apk` — **4,450,522 bytes**, md5 `428b7a11fdad4797fc45e9744c239bb1`
+- `android/app/build/outputs/apk/debug/app-debug.apk` — **4,450,522 bytes**, md5 `428b7a11fdad4797fc45e9744c239bb1`
+- `apk/DIAGNOSTIC_REPORT.md`, `apk/native-probe-output.txt`,
+  `apk/native_classes_in_dex.txt`, `apk/keyless_api_probe.txt` — all present (non-empty).
+- `capacitor.config.json` → `appId: com.petrockstudios.marketintelligence`,
+  `appName: Market Intelligence`, `webDir: www`, `CapacitorHttp.enabled: true`.
+
+### Direct answers (final — see FINAL section above for full detail)
+- **Q1 — why the Android request fails ("NETWORK OR CORS ERROR / Status: N/A"):**
+  the WebView `window.fetch` fallback is CORS-blocked by api.tickerbot.io. The app runs on
+  origin `https://localhost` (`androidScheme: https`); a keyless probe with
+  `Origin: https://localhost` returns `HTTP 403 cors_origin_denied` with **no
+  Access-Control-Allow-Origin** — the CORS check runs before auth. `www/api.js:305` maps
+  the resulting status-0 fetch to `ApiError('network','NETWORK OR CORS ERROR',0)` →
+  "Status: N/A". The **native** bridge path
+  (`assets/capacitor.plugins.json` → `com.getcapacitor.plugin.http.Http`, present in
+  `classes7.dex`) sends **no Origin header**; the real
+  `com.getcapacitor.plugin.http.CapacitorHttpUrlConnection` harness hit the live server
+  and got a real **HTTP 401** `{"error":"unauthenticated","message":"Malformed API key.
+  Expected tb_test_* or tb_live_*.",...}` for a dummy Bearer — reachability proven; only
+  a valid `tb_test_*`/`tb_live_*` key is missing for a 200. Authorization is always logged
+  as `Bearer <redacted>`; no real key is printed anywhere.
+- **Q2 — what file:line to change:**
+  `www/api.js` `isNativeRuntime()` **line 21** and `_doFetch` native branch
+  **lines 241–257** (`strategy='native'` at 241, `Http.request` at 243–250) are the guard
+  point: keep `Http.request` bound to the native bridge (present iff
+  `Capacitor.PluginHeaders` has `Http`), never let it fall back to the bundled `HttpWeb`
+  web impl. `www/app.js` `testConnection()` **line 231** surfaces the error (TEMP
+  diagnostics at **305/319/325**). No code change is required for the current APK.
+
+### Honest limitation
+On-device logcat capture is **not possible on this box** (no adb device, no emulator,
+no AVD). The native path was verified via the real `CapacitorHttpUrlConnection` harness
+plus a real live-server HTTP response, plus DEX/bundled-plugin evidence. Install on the
+studio machine and confirm `branch=native` + `native-Http-plugin-header=present` in
+logcat (`adb install -r apk/market-intelligence-debug.apk`), then supply a valid
+`tb_test_*`/`tb_live_*` key in Settings; TEMP diagnostics are revertible after that run.
