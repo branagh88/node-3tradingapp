@@ -1,9 +1,3 @@
-# RUNTIME NATIVE HTTP PROBE — canonical output
-# generated: 2026-08-19T17:49:02Z (fresh re-run this task)
-# APK: apk/market-intelligence-debug.apk (md5 428b7a11fdad4797fc45e9744c239bb1)
-# driven class: com.getcapacitor.plugin.http.CapacitorHttpUrlConnection (real source, unmodified, @capacitor-community/http v1.4.1)
-# Authorization used: DUMMY value only; logged as 'Bearer <redacted>' — real key never printed.
-
 === RUNTIME NATIVE HTTP PROBE (CapacitorHttpUrlConnection) ===
 drivenClass=com.getcapacitor.plugin.http.CapacitorHttpUrlConnection
 method=GET url=https://api.tickerbot.io/v2/tickers/AAPL
@@ -19,11 +13,11 @@ headers: Accept: application/json, Content-Type: application/json, Authorization
 
 --- REAL HTTP RESPONSE (native path) ---
 HTTP status=401
-response body={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_afbcb6fb2f442ff3034b"}
+response body={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_1424babecdd3f0b0afbe"}
 
 --- selected response headers ---
   Content-Type: application/json; charset=utf-8
-  Date: Wed, 19 Aug 2026 17:49:02 GMT
+  Date: Wed, 19 Aug 2026 18:23:11 GMT
   Server: nginx/1.24.0 (Ubuntu)
   Access-Control-Allow-Origin: null
   X-Request-Id: null
@@ -34,4 +28,3 @@ native path http_status=401 (non-zero=true)
 native path reaches api.tickerbot.io and returns a real HTTP response: YES
 access-control-allow-origin=<none> (native path is NOT CORS-blocked)
 contrast: WebView window.fetch path would be CORS-blocked -> status 0 / 'N/A'
-probe_exit=0

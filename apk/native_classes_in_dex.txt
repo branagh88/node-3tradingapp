@@ -1,11 +1,11 @@
-# Native Http plugin classes present in APK DEX (classes7.dex)
+# Native Http plugin classes present in APK DEX
 # container: apk/market-intelligence-debug.apk
 # tool: android-sdk/build-tools/35.0.0/dexdump
-com.getcapacitor.plugin.http.Http
-com.getcapacitor.plugin.http.HttpRequestHandler
-com.getcapacitor.plugin.http.CapacitorHttpUrlConnection
-com.getcapacitor.plugin.http.ICapacitorHttpUrlConnection
-com.getcapacitor.Bridge (Capacitor core JS bridge)
+com.getcapacitor.plugin.http.Http  (in classes7.dex)
+com.getcapacitor.plugin.http.HttpRequestHandler  (in classes7.dex)
+com.getcapacitor.plugin.http.CapacitorHttpUrlConnection  (in classes7.dex)
+com.getcapacitor.plugin.http.ICapacitorHttpUrlConnection  (in classes7.dex)
+com.getcapacitor.Bridge  (in classes3.dex)
 # capacitor.plugins.json inside APK (assets/capacitor.plugins.json):
 [
 	{

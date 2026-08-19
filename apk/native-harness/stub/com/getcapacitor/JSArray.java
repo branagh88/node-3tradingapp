@@ -9,6 +9,16 @@ public class JSArray {
     public JSArray() {}
 
     public JSArray(String json) {
-        throw new UnsupportedOperationException("JSArray(String) not needed by native probe");
+        // Permissive desktop stand-in: never throws, keeps the raw payload.
+        this.raw = json;
     }
+
+    private String raw = null;
+
+    public int length() { return raw == null ? 0 : 1; }
+
+    public String getString(int index) { return raw; }
+
+    @Override
+    public String toString() { return raw == null ? "[]" : raw; }
 }
