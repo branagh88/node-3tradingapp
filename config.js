@@ -22,6 +22,11 @@ settings: {
   maxConcurrency: 4,
   retryMax: 2, 
   staleAfterMs: null, 
+  // CORS proxy settings (Settings > Android/CORS): useProxy enables the
+  // multi-service proxy chain in browser runtimes; proxyUrl is an optional
+  // user-supplied CORS proxy that is tried first.
+  useProxy: true,
+  proxyUrl: '',
 },
 };
 

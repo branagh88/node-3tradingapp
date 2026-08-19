@@ -54,6 +54,47 @@ export function resolveBaseURL(base, loc) {
   return base;
 }
 
+// ---------------------------------------------------------------------------
+// CORS proxy helpers (module-level, pure)
+// ---------------------------------------------------------------------------
+
+// Parse a body that MUST be JSON. Returns { ok: true, data } on success, or
+// { ok: false, reason } when the body is empty, HTML/error-page, or otherwise
+// not JSON. Used to detect a "bad" proxy so the chain falls through.
+function parseJsonBody(text) {
+  const trimmed = String(text == null ? '' : text)
+    .replace(/^\uFEFF/, '') // strip UTF-8 BOM
+    .trim();
+  if (!trimmed) return { ok: false, reason: 'empty response body' };
+  if (/^</.test(trimmed)) {
+    return { ok: false, reason: `non-JSON body (HTML/error page: "${trimmed.slice(0, 60).replace(/\s+/g, ' ')}")` };
+  }
+  try {
+    return { ok: true, data: JSON.parse(trimmed) };
+  } catch {
+    return { ok: false, reason: `non-JSON body ("${trimmed.slice(0, 60).replace(/\s+/g, ' ')}")` };
+  }
+}
+
+// Build the proxied URL for a user-supplied custom CORS proxy. Supports the
+// common conventions: an existing `url=` query param (allorigins-style base),
+// a `{url}` placeholder, or a bare base that gets `?url=<encoded>` appended.
+function buildCustomProxyUrl(proxyBase, target) {
+  const base = String(proxyBase || '').trim();
+  if (!base || !/^https?:\/\//i.test(base)) return null;
+  const encoded = encodeURIComponent(target);
+  if (base.includes('{url}')) return base.replace(/\{url\}/g, encoded);
+  try {
+    const u = new URL(base);
+    if (u.searchParams.has('url')) {
+      u.searchParams.set('url', target);
+      return u.toString();
+    }
+  } catch { /* not an absolute URL — treat as a bare base below */ }
+  const sep = base.includes('?') ? (base.endsWith('?') || base.endsWith('&') ? '' : '&') : '?';
+  return `${base}${sep}url=${encoded}`;
+}
+
 // kind -> default Tickerbot path segment (used by effectivePath when no
 // explicit endpoint override is configured).
 const KIND_ENDPOINTS = {
@@ -132,8 +173,23 @@ setConfig(config) {
   this.config = config || {};
   this.settings = this.config.settings || {};
   this.timeoutMs = this.settings.timeoutMs || 10000;
+  // Settings > Android/CORS: useProxy checkbox + optional custom proxy URL.
+  // Defaults: proxy ON (browser origins can't reach the API without one),
+  // custom URL empty (use the built-in allorigins/corsproxy.io services).
+  this.useProxy = this.settings.useProxy !== false;
+  this.proxyUrl = typeof this.settings.proxyUrl === 'string' ? this.settings.proxyUrl.trim() : '';
   this.cache.clear();
   return this;
+}
+
+// Should this runtime route browser fetches through the CORS proxy chain?
+// Local dev origins already use the same-origin server.mjs proxy, and the
+// Capacitor native shell uses the native HTTP plugin — neither needs a CORS
+// wrapper. Everywhere else the chain is used unless the user disabled it.
+shouldUseProxy() {
+  if (isNativeRuntime()) return false;
+  if (isLocalDevOrigin()) return false;
+  return this.useProxy;
 }
 
 isConfigured() {
@@ -160,6 +216,119 @@ effectivePath(kind, endpoint) {
   const version = this.config.apiVersion || 'v2';
   const segment = KIND_ENDPOINTS[kind] || String(kind);
   return this.buildUrl(`${version}/${segment}`);
+}
+
+// ---- CORS proxy fallback chain --------------------------------------------
+// Tickerbot's API does not send CORS headers, so non-dev browser origins
+// (static hosting, StackBlitz, GitHub Pages) cannot fetch api.tickerbot.io
+// directly. `_fetchWithProxy` runs an ordered chain:
+//   1. custom proxyUrl from Settings (user-controlled, may forward headers)
+//   2. https://api.allorigins.win/get?url=...  (wraps body in {contents})
+//   3. https://corsproxy.io/?<encoded-url>     (returns the raw body)
+//   4. direct connection                       (last resort)
+// A strategy is skipped when it fails to fetch, returns an HTTP error, or
+// returns a non-JSON/HTML body, so a bad proxy falls through to the next.
+// The per-strategy failures are attached to the final ApiError.strategyErrors
+// and to a successful response's `_strategyErrors` for the Settings test.
+async _fetchWithProxy(url, init = {}) {
+  const method = init.method || 'GET';
+  const strategies = [];
+
+  // Public CORS proxies cannot forward an Authorization header, so only GET
+  // data requests are routed through them (POST like /v2/scan goes straight
+  // to direct/native). The user's custom proxy MAY forward headers, so the
+  // original headers (incl. Bearer) are only sent to it.
+  if (this.shouldUseProxy() && method === 'GET') {
+    if (this.proxyUrl) {
+      strategies.push({ name: 'custom proxy', run: () => this._fetchViaCustomProxy(this.proxyUrl, url, init) });
+    }
+    strategies.push({ name: 'allorigins', run: () => this._fetchViaAllOrigins(url, init) });
+    strategies.push({ name: 'corsproxy.io', run: () => this._fetchViaCorsProxy(url, init) });
+  }
+  strategies.push({ name: 'direct', run: () => fetch(url, { method, headers: init.headers, body: init.body, signal: init.signal }) });
+
+  const errors = [];
+  for (const s of strategies) {
+    try {
+      const res = await s.run();
+      try { res._strategyErrors = errors.slice(); } catch { /* non-extensible response */ }
+      return res;
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw err; // timeout — stop the chain
+      const detail = err && err.message ? err.message : String(err);
+      errors.push({ strategy: s.name, message: detail });
+      console.debug(`[api] strategy "${s.name}" failed (${detail}) — trying next`);
+    }
+  }
+
+  // Every strategy failed: throw a single ApiError with per-strategy details
+  // so callers (e.g. testConnection) can report exactly what happened instead
+  // of a generic 'NETWORK OR CORS ERROR'.
+  const apiErr = new ApiError('network', 'NETWORK OR CORS ERROR', 0);
+  apiErr.strategyErrors = errors;
+  apiErr.strategiesTried = strategies.map((s) => s.name);
+  throw apiErr;
+}
+
+// User-configured proxy. Keeps the original headers (Bearer included) so a
+// self-hosted proxy that forwards them can authenticate to the real API.
+async _fetchViaCustomProxy(proxyBase, url, init) {
+  const proxyUrl = buildCustomProxyUrl(proxyBase, url);
+  if (!proxyUrl) throw new Error('invalid custom proxy URL');
+  const res = await fetch(proxyUrl, { method: init.method, headers: init.headers, body: init.body, signal: init.signal });
+  if (!res.ok) throw new Error(`proxy returned HTTP ${res.status}`);
+  const body = await res.text();
+  const parsed = parseJsonBody(body);
+  if (!parsed.ok) throw new Error(parsed.reason);
+  return this._fakeResponse(res.status, parsed.data, body, 'custom proxy');
+}
+
+// allorigins wraps the upstream body in JSON: { contents: "<body>", status: { http_code } }.
+async _fetchViaAllOrigins(url, init) {
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  // No Authorization header: public proxies do not forward it (and we must
+  // not leak the API key to a third party unnecessarily).
+  const res = await fetch(proxyUrl, { signal: init.signal, headers: { 'Accept': 'application/json' } });
+  const body = await res.text();
+  const wrap = parseJsonBody(body);
+  if (!wrap.ok) throw new Error(wrap.reason);
+  const wrapper = wrap.data && typeof wrap.data === 'object' ? wrap.data : {};
+  const code = wrapper.status && typeof wrapper.status.http_code === 'number' ? wrapper.status.http_code : res.status;
+  if (code < 200 || code >= 300) {
+    const ct = wrapper.status && wrapper.status.content_type ? ` (${wrapper.status.content_type})` : '';
+    throw new Error(`proxy returned HTTP ${code}${ct}`);
+  }
+  let data = wrapper.contents;
+  if (typeof data === 'string') {
+    const inner = parseJsonBody(data);
+    if (!inner.ok) throw new Error(`upstream returned ${inner.reason}`);
+    data = inner.data;
+  }
+  if (data == null) throw new Error('empty upstream body');
+  return this._fakeResponse(code, data, body, 'allorigins');
+}
+
+// corsproxy.io returns the raw upstream body (must already be JSON).
+async _fetchViaCorsProxy(url, init) {
+  const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+  const res = await fetch(proxyUrl, { signal: init.signal, headers: { 'Accept': 'application/json' } });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`proxy returned HTTP ${res.status}`);
+  const parsed = parseJsonBody(body);
+  if (!parsed.ok) throw new Error(parsed.reason);
+  return this._fakeResponse(res.status, parsed.data, body, 'corsproxy.io');
+}
+
+// Uniform response-shaped object for proxy strategies (direct fetches keep
+// the native fetch Response; _doFetch only needs status/ok/json/text).
+_fakeResponse(status, data, body, strategy) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => data,
+    text: async () => body,
+    _strategy: strategy,
+  };
 }
 
 async _doFetch(path, options = {}) {
@@ -194,6 +363,8 @@ async _doFetch(path, options = {}) {
   console.debug(`[api] dispatch ${method} ${safeUrl}`, { headers: logHeaders });
 
   let response;
+  let strategy = null;
+  let strategyErrors = [];
   try {
     if (isNative) {
       const { Http } = await import('./vendor/http-plugin.js');
@@ -205,18 +376,25 @@ async _doFetch(path, options = {}) {
         connectTimeout: this.timeoutMs,
         readTimeout: this.timeoutMs,
       });
+      strategy = 'native';
       response = {
         status: nativeRes.status,
         ok: nativeRes.status >= 200 && nativeRes.status < 300,
         json: async () => (typeof nativeRes.data === 'string' ? JSON.parse(nativeRes.data) : nativeRes.data),
       };
     } else {
-      response = await fetch(finalUrl, {
+      // Browser fetch through the CORS proxy fallback chain (custom proxy →
+      // allorigins → corsproxy.io → direct). Local dev origins keep using the
+      // same-origin server.mjs proxy and native never enters this branch, so
+      // neither existing path is disturbed.
+      response = await this._fetchWithProxy(finalUrl, {
         method,
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
       });
+      strategy = response._strategy || 'direct';
+      strategyErrors = response._strategyErrors || [];
     }
   } catch (err) {
     if (err.name === 'AbortError') throw new ApiError('timeout', 'Request timed out', 0);
@@ -238,6 +416,8 @@ async _doFetch(path, options = {}) {
     });
     const apiErr = new ApiError('network', 'NETWORK OR CORS ERROR', 0);
     apiErr.cause = err;
+    // Attach per-strategy failures so testConnection can show what happened.
+    if (err && Array.isArray(err.strategyErrors)) apiErr.strategyErrors = err.strategyErrors;
     throw apiErr;
   } finally {
     clearTimeout(timer);
@@ -250,8 +430,19 @@ async _doFetch(path, options = {}) {
   if (response.status >= 500) throw new ApiError('server', 'TICKERBOT SERVER ERROR', response.status);
   if (!response.ok) throw new ApiError('unknown', `HTTP ${response.status}`, response.status);
 
-  const data = await response.json();
-  return { data, meta: { status: response.status, url: safeUrl, timestamp: Date.now() } };
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    // A strategy claimed JSON but the body wasn't (captive portal / HTML
+    // error page) — surface it instead of a raw SyntaxError so the Settings
+    // test can explain the failure.
+    const apiErr = new ApiError('network', 'INVALID JSON RESPONSE (non-JSON body)', response.status || 0);
+    apiErr.cause = err;
+    apiErr.strategyErrors = strategyErrors;
+    throw apiErr;
+  }
+  return { data, meta: { status: response.status, url: safeUrl, strategy, strategyErrors, timestamp: Date.now() } };
 }
 
 async getTickerQuote(ticker) {
