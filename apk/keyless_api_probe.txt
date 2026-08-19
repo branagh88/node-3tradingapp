@@ -1,0 +1,12 @@
+# Keyless API probe (no API key used -> nothing sensitive exposed)
+# Probe: GET https://api.tickerbot.io/v2/tickers/AAPL (direct, no Origin, no Authorization)
+=> HTTP 401 {\"error\":\"unauthenticated\",\"message\":\"Missing Authorization: Bearer header.\"}
+# => api.tickerbot.io IS network-reachable; it requires a Bearer token.
+
+# Probe: same URL with Origin: https://localhost (WebView/browser-like)
+=> HTTP 403 {\"error\":\"cors_origin_denied\",\"message\":\"CORS policy does not allow this origin\"}
+# => api.tickerbot.io has NO Access-Control-Allow-Origin for the native WebView origin.
+# => Any window.fetch from the APK (web/fallback Http impl) is CORS-blocked -> 'Failed to fetch'
+#    -> api.js maps it to ApiError(network, "NETWORK OR CORS ERROR", 0) -> "Status: N/A".
+#    This is checked BEFORE auth, so it happens whether or not the key is correct.
+# Conclusion: native Http.request must bind the bridge (no Origin header) to reach the API.

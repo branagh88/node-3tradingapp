@@ -1,0 +1,17 @@
+# TEMP-DIAGNOSTIC markers in www/api.js and www/app.js (Phase B)
+# File lines (grep):
+www/api.js:208:  // TEMP-DIAGNOSTIC (revert later): log which branch will run and whether the
+www/api.js:241:      strategy = 'native'; // TEMP-DIAGNOSTIC (revert later)
+www/api.js:274:    // TEMP-DIAGNOSTIC (revert later): capture the EXACT native failure fields
+www/app.js:305:   // TEMP-DIAGNOSTIC (revert later): surface the REAL native failure fields on
+
+# www/api.js native branch -> import vendor/http-plugin.js + Http.request:
+201:  // and bundled with esbuild into ./vendor/http-plugin.js — see
+225:          : 'MISSING (Http.request falls back to bundled HttpWeb web impl -> CORS-blocked fetch)'));
+242:      const { Http } = await import('./vendor/http-plugin.js');
+243:      const nativeRes = await Http.request({
+
+# www/app.js testConnection surfaces native cause on settings diagnostic screen:
+319:     console.log('[app:temp] testConnection failed', { isNative: capNative, nativeHttpPluginHeader: httpHeader, cause: causeObj });
+320:     capState = `<div style="font-size:11px;opacity:.8;">native=${capNative}; native-Http-plugin-header=${httpHeader ? 'present' : 'MISSING'}</div>`;
+325:     ? `<div style="margin-top:6px;font-size:12px;"><strong>TEMP native cause:</strong> ${causeBits.join(' · ')}</div>`

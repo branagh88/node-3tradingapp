@@ -205,6 +205,29 @@ async _doFetch(path, options = {}) {
   // never load it; every non-native runtime keeps using window.fetch.
   const isNative = isNativeRuntime();
 
+  // TEMP-DIAGNOSTIC (revert later): log which branch will run and whether the
+  // native bridge route exists in this WebView BEFORE dispatching, so a native
+  // failure is never hidden behind the generic 'NETWORK OR CORS ERROR'.
+  // Never prints the API key (Authorization stays redacted).
+  {
+    try {
+      const cap = globalThis.Capacitor;
+      const headers = (cap && Array.isArray(cap.PluginHeaders)) ? cap.PluginHeaders : [];
+      const httpHeader = headers.find((h) => h && h.name === 'Http') || null;
+      const hasRequestMethod = !!(httpHeader && (httpHeader.methods || []).some((m) => m && m.name === 'request'));
+      console.log('[api:temp] dispatch method=' + method + ' branch=' + (isNative ? 'native' : 'browser') + ' url=' + safeUrl);
+      console.log('[api:temp] Capacitor global=' + !!cap +
+        ' isNativePlatform(fn)=' + (typeof (cap && cap.isNativePlatform) === 'function') +
+        ' isNativePlatform()=' + !!(cap && cap.isNativePlatform && cap.isNativePlatform()));
+      console.log('[api:temp] PluginHeaders count=' + headers.length +
+        ' HttpHeader=' + (httpHeader
+          ? ('present requestInHeader=' + hasRequestMethod + ' methods=' + JSON.stringify((httpHeader.methods || []).map((m) => m && m.name)))
+          : 'MISSING (Http.request falls back to bundled HttpWeb web impl -> CORS-blocked fetch)'));
+    } catch (e) {
+      console.log('[api:temp] diag-error ' + (e && e.message));
+    }
+  }
+
   // Log the exact dispatch for diagnostics (never the raw Authorization value).
   const logHeaders = { ...headers };
   if (logHeaders['Authorization']) logHeaders['Authorization'] = 'Bearer <redacted>';
@@ -215,6 +238,7 @@ async _doFetch(path, options = {}) {
   let strategyErrors = [];
   try {
     if (isNative) {
+      strategy = 'native'; // TEMP-DIAGNOSTIC (revert later)
       const { Http } = await import('./vendor/http-plugin.js');
       const nativeRes = await Http.request({
         url: finalUrl,
@@ -247,6 +271,21 @@ async _doFetch(path, options = {}) {
     }
   } catch (err) {
     if (err.name === 'AbortError') throw new ApiError('timeout', 'Request timed out', 0);
+    // TEMP-DIAGNOSTIC (revert later): capture the EXACT native failure fields
+    // (strategy that ran + full error object) so logcat shows the real cause.
+    console.error('[api:temp] failed branch=' + strategy + ' method=' + method + ' url=' + safeUrl, {
+      name: err && err.name,
+      message: err && err.message,
+      stack: err && err.stack,
+      cause: err && err.cause,
+      code: err && err.code,
+      errorCode: err && err.errorCode,
+      errorMessage: err && err.errorMessage,
+      url: err && err.url,
+      status: err && err.status,
+      body: err && err.body,
+      strategyErrors: err && Array.isArray(err.strategyErrors) ? err.strategyErrors : undefined,
+    });
     // Preserve + log the FULL original error (name, message, stack, cause, and
     // native plugin error fields) so callers can distinguish a DNS failure from
     // an SSL handshake failure from a blocked WebView request. Throw a NEW
