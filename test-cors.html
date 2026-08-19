@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CORS Proxy Diagnostic — node-3tradingapp</title>
+<style>
+  :root {
+    --ok: #16a34a;
+    --fail: #dc2626;
+    --warn: #d97706;
+    --muted: #6b7280;
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --line: #334155;
+    --text: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0 0 18px; color: var(--muted); }
+  .controls {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 18px;
+  }
+  .controls label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  .controls input {
+    background: #0b1220; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: 13px monospace; min-width: 220px;
+  }
+  button {
+    background: #2563eb; color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 16px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  .banner {
+    border: 1px solid var(--warn); background: rgba(217,119,6,.12); color: #fcd34d;
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 13px;
+  }
+  .summary {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 18px;
+  }
+  .summary h2 { margin: 0 0 10px; font-size: 16px; }
+  .summary .big { font-size: 22px; font-weight: 800; }
+  .summary .ok { color: var(--ok); }
+  .summary .fail { color: var(--fail); }
+  .summary .warn { color: var(--warn); }
+  .summary p { margin: 6px 0; }
+  .summary ul { margin: 6px 0 6px 2px; padding-left: 20px; }
+  .summary li { margin: 2px 0; }
+  .strategy {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .strategy h3 { margin: 0 0 8px; font-size: 14px; display: flex; gap: 10px; align-items: center; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .badge.ok   { background: rgba(22,163,74,.18); color: #4ade80; }
+  .badge.fail { background: rgba(220,38,38,.18); color: #f87171; }
+  .badge.warn { background: rgba(217,119,6,.18); color: #fbbf24; }
+  .badge.mute { background: rgba(107,114,128,.18); color: #9ca3af; }
+  .kv { font-size: 13px; margin: 2px 0; word-break: break-all; }
+  .kv b { color: var(--muted); font-weight: 600; margin-right: 6px; }
+  .kv code, code { background: #0b1220; padding: 1px 6px; border-radius: 4px; font: 12px monospace; color: #93c5fd; }
+  .note { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+  .running { opacity: .55; }
+  footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CORS Proxy Diagnostic — node-3tradingapp</h1>
+  <p>
+    Reproduces the app's proxy chain from <code>api.js</code> + <code>config.js</code> and tests every hop
+    with a live GET, classifying each failure as <b>NETWORK</b> (DNS/TCP/TLS/timeout),
+    <b>CORS</b> (missing <code>access-control-allow-origin</code>), or
+    <b>PROXY MISBEHAVIOR</b> (HTML error body / non-JSON).
+  </p>
+</header>
+
+<div class="banner" id="serve-banner">
+  ⚠ This page must be served by <code>node server.mjs</code> and opened on
+  <code>http://localhost:3000/test-cors.html</code> — the same-origin hop below depends on it.
+  (Current origin: <code id="cur-origin"></code>)
+</div>
+
+<div class="controls">
+  <label>Probe path
+    <input id="probe" value="/v2/status" spellcheck="false" />
+  </label>
+  <label>Custom proxy URL (optional, Settings &gt; proxyUrl)
+    <input id="proxyUrl" placeholder="https://my-proxy.example.com" spellcheck="false" />
+  </label>
+  <button id="run" type="button">Run tests now</button>
+</div>
+
+<div id="summary" class="summary" hidden>
+  <h2 id="summary-title">Summary</h2>
+  <p class="big" id="summary-verdict">…</p>
+  <div id="summary-detail"></div>
+</div>
+
+<div id="results"></div>
+
+<footer>
+  Zero-dependency vanilla JS. No data leaves your browser beyond the requests described above.
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var TIMEOUT_MS = 10000;
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  var sample = function (text, max) {
+    var t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max) + '…' : t;
+  };
+  var latency = function (ms) { return ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : Math.round(ms) + 'ms'; };
+
+  $('cur-origin').textContent = location.origin;
+
+  // Mirror of api.js parseJsonBody
+  function parseJsonBody(text) {
+    var t = String(text == null ? '' : text).replace(/^\uFEFF/, '').trim();
+    if (!t) return { ok: false, reason: 'empty response body' };
+    if (/^</.test(t)) return { ok: false, reason: 'HTML page / proxy error body (' + sample(t, 70) + ')' };
+    try { JSON.parse(t); return { ok: true }; }
+    catch (e) { return { ok: false, reason: 'non-JSON body (' + sample(t, 70) + ')' }; }
+  }
+
+  // Mirror of api.js buildCustomProxyUrl
+  function buildCustomProxyUrl(base, target) {
+    var b = String(base || '').trim();
+    if (!b || !/^https?:\/\//i.test(b)) return null;
+    var enc = encodeURIComponent(target);
+    if (b.indexOf('{url}') !== -1) return b.replace(/\{url\}/g, enc);
+    try {
+      var u = new URL(b);
+      if (u.searchParams.has('url')) { u.searchParams.set('url', target); return u.toString(); }
+    } catch (e) { /* bare base */ }
+    var sep = b.indexOf('?') !== -1 ? (b.slice(-1) === '?' || b.slice(-1) === '&' ? '' : '&') : '?';
+    return b + sep + 'url=' + enc;
+  }
+
+  function classifyError(err, strategy, context) {
+    if (err && err.name === 'AbortError') {
+      return { cls: 'NETWORK FAILURE (timeout)', detail: 'No response within ' + TIMEOUT_MS + 'ms (AbortError).' };
+    }
+    var msg = err && err.message ? err.message : String(err);
+    // In a browser, cross-origin fetches that are blocked by CORS reject with
+    // TypeError "Failed to fetch" — indistinguishable from a dead host at the
+    // fetch layer. We disambiguate using context the page already knows.
+    if (err && err.name === 'TypeError' && /failed to fetch|networkerror/i.test(msg)) {
+      if (!navigator.onLine) return { cls: 'NETWORK FAILURE (offline)', detail: 'navigator.onLine === false — device/network offline.' };
+      if (context.hostReachable) {
+        return { cls: 'CORS FAILURE', detail: 'TypeError "Failed to fetch" while ' + strategy + ' IS reachable ⇒ the response lacks access-control-allow-origin, so the browser blocked reading it.' };
+      }
+      return { cls: 'NETWORK or CORS', detail: 'TypeError "Failed to fetch" — with no reachable hop to compare against, this is either a network failure (DNS/TCP/TLS) or a CORS block.' };
+    }
+    return { cls: 'NETWORK FAILURE (' + (err && err.name || 'error') + ')', detail: msg };
+  }
+
+  async function probe(strategy, url, context) {
+    var t0 = performance.now();
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, TIMEOUT_MS);
+    var r = { name: strategy, url: url, status: null, latencyMs: null, corsHeader: null, bodySample: '', cls: null, detail: '', ok: false };
+    try {
+      var res;
+      try {
+        res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' }, redirect: 'follow', signal: controller.signal });
+      } catch (err) {
+        r.latencyMs = performance.now() - t0;
+        var c = classifyError(err, strategy, context);
+        r.cls = c.cls; r.detail = c.detail;
+        return r;
+      }
+      r.latencyMs = performance.now() - t0;
+      r.status = res.status;
+      try { r.corsHeader = res.headers.get('access-control-allow-origin'); } catch (e) { r.corsHeader = null; }
+      var text = await res.text();
+      r.bodySample = sample(text, 180);
+      var parsed = parseJsonBody(text);
+
+      if (!parsed.ok) {
+        r.cls = 'PROXY MISBEHAVIOR';
+        r.detail = 'HTTP ' + res.status + ' — ' + parsed.reason + '. Not usable as a JSON proxy (api.js falls through).';
+        return r;
+      }
+      if (!r.corsHeader) {
+        r.cls = 'CORS FAILURE';
+        r.detail = 'HTTP ' + res.status + ' with valid JSON but NO access-control-allow-origin header — a browser cannot read this response.';
+        return r;
+      }
+      var is2xx = res.status >= 200 && res.status < 300;
+      if (is2xx) {
+        r.cls = 'OK';
+        r.ok = true;
+        r.detail = 'HTTP ' + res.status + ', JSON body, CORS ok [' + r.corsHeader + '].';
+      } else {
+        r.cls = 'REACHED (non-2xx)';
+        r.detail = 'HTTP ' + res.status + ', JSON, CORS ok [' + r.corsHeader + '] — proxy plumbing works; upstream refused the request (' + sample(text, 70) + ').';
+      }
+      return r;
+    } finally { clearTimeout(timer); }
+  }
+
+  function validateAllOrigins(r) {
+    if (r.status == null || !r.bodySample || (r.cls && r.cls === 'PROXY MISBEHAVIOR')) return r;
+    try {
+      var wrap = JSON.parse(String(r.bodySample).replace(/^[\s\uFEFF]+|[\s\uFEFF]+$/g, ''));
+      if (wrap && typeof wrap === 'object' && Object.prototype.hasOwnProperty.call(wrap, 'contents')) {
+        var code = wrap.status && typeof wrap.status.http_code === 'number' ? wrap.status.http_code : r.status;
+        var contents = wrap.contents;
+        if (code < 200 || code >= 300) {
+          r.cls = 'PROXY MISBEHAVIOR';
+          r.detail = 'allorigins wrapper reports upstream HTTP ' + code + ' — the upstream fetch failed inside the proxy.';
+          r.ok = false;
+        } else if (typeof contents === 'string') {
+          var inner = parseJsonBody(contents);
+          if (!inner.ok) { r.cls = 'PROXY MISBEHAVIOR'; r.detail = 'allorigins wrapper delivered, but contents: ' + inner.reason + '.'; r.ok = false; }
+          else { r.ok = !!r.corsHeader; r.cls = r.ok ? 'OK' : 'CORS FAILURE'; r.detail = r.ok ? 'allorigins wrapper HTTP ' + code + ', upstream JSON delivered, CORS [' + r.corsHeader + '].' : 'allorigins wrapper HTTP ' + code + ', upstream JSON, but no access-control-allow-origin.'; }
+        } else { r.cls = 'PROXY MISBEHAVIOR'; r.detail = 'allorigins wrapper has no contents.'; r.ok = false; }
+      }
+    } catch (e) { /* non-JSON handled by probe */ }
+    return r;
+  }
+
+  function badgeFor(r) {
+    if (r.cls === 'OK') return { text: 'PASS', kind: 'ok' };
+    if (r.cls === 'SKIPPED') return { text: 'SKIPPED', kind: 'mute' };
+    if (r.cls === 'REACHED (non-2xx)') return { text: 'WARN', kind: 'warn' };
+    if (r.cls === 'NETWORK FAILURE (offline)' || r.cls === 'NETWORK FAILURE (timeout)') return { text: 'FAIL · NETWORK', kind: 'fail' };
+    if (r.cls && r.cls.indexOf('NETWORK') === 0) return { text: 'FAIL · NETWORK', kind: 'fail' };
+    if (r.cls === 'CORS FAILURE') return { text: 'FAIL · CORS', kind: 'fail' };
+    if (r.cls === 'PROXY MISBEHAVIOR') return { text: 'FAIL · PROXY', kind: 'fail' };
+    return { text: 'FAIL', kind: 'fail' };
+  }
+
+  function renderCard(r) {
+    var b = badgeFor(r);
+    var clsColor = b.kind === 'fail' ? 'var(--fail)' : b.kind === 'warn' ? 'var(--warn)' : 'var(--muted)';
+    var el = document.createElement('div');
+    el.className = 'strategy';
+    el.innerHTML =
+      '<h3><code>' + esc(r.name) + '</code><span class="badge ' + b.kind + '">' + b.text + '</span></h3>' +
+      '<div class="kv"><b>url</b><code>' + esc(r.url) + '</code></div>' +
+      '<div class="kv"><b>status</b>' + (r.status == null ? '— (no HTTP response)' : esc(r.status)) + '</div>' +
+      '<div class="kv"><b>latency</b>' + (r.latencyMs == null ? '—' : latency(r.latencyMs)) + '</div>' +
+      '<div class="kv"><b>cors</b>' + (r.corsHeader ? 'present → <code>' + esc(r.corsHeader) + '</code>' : 'MISSING access-control-allow-origin') + '</div>' +
+      '<div class="kv"><b>sample</b><code>' + esc(r.bodySample || '(empty body)') + '</code></div>' +
+      '<div class="kv" style="color:' + clsColor + ';font-weight:700;"><b>result</b>' + esc(r.cls || '—') + '</div>' +
+      (r.detail ? '<div class="note">' + esc(r.detail) + '</div>' : '');
+    return el;
+  }
+
+  async function run() {
+    var runBtn = $('run');
+    runBtn.disabled = true;
+    runBtn.textContent = 'Running…';
+    $('summary').hidden = true;
+    var resultsEl = $('results');
+    resultsEl.innerHTML = '<div class="running">Testing each strategy in order… (timeout ' + TIMEOUT_MS + 'ms per hop)</div>';
+
+    var probePath = ($('probe').value.trim() || '/v2/status');
+    var probeBase = 'https://api.tickerbot.io' + (probePath[0] === '/' ? probePath : '/' + probePath);
+    var customBase = $('proxyUrl').value.trim();
+    var localUrl = location.origin + (probePath[0] === '/' ? probePath : '/' + probePath);
+    var allOriginsUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(probeBase);
+    var corsProxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(probeBase);
+    var customProxyUrl = customBase ? buildCustomProxyUrl(customBase, probeBase) : null;
+
+    var list = [
+      { name: '1 · same-origin server.mjs proxy', fn: function (c) { return probe('same-origin', localUrl, c); }, note: 'same-origin → server.mjs adds access-control-allow-origin: * and forwards /v2/* to the API.' },
+      { name: '2 · custom proxyUrl (Settings)', fn: function (c) { return customProxyUrl ? probe('custom', customProxyUrl, c) : Promise.resolve({ name: 'custom', url: customBase || '(unset)', status: null, latencyMs: null, corsHeader: null, bodySample: '', cls: 'SKIPPED', detail: 'settings.proxyUrl is empty — api.js skips this hop too.', ok: false }); }, note: 'Only when a custom proxy URL is configured.' },
+      { name: '3 · allorigins', fn: function (c) { return probe('allorigins', allOriginsUrl, c).then(validateAllOrigins); }, note: 'Wrapper: {contents, status.http_code}.' },
+      { name: '4 · corsproxy.io', fn: function (c) { return probe('corsproxy.io', corsProxyUrl, c); }, note: 'Returns the raw upstream body.' },
+      { name: '5 · direct api.tickerbot.io', fn: function (c) { return probe('direct', probeBase, c); }, note: 'Last resort. The API does not send access-control-allow-origin, so browsers block it.' },
+    ];
+
+    var results = [];
+    var hostReachable = false; // set true once any hop proves api.tickerbot.io is reachable this session
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      var card = document.createElement('div');
+      card.className = 'strategy running';
+      card.innerHTML = '<h3><code>' + esc(item.name) + '</code><span class="badge mute">…</span></h3><div class="note">' + esc(item.note || '') + '</div>';
+      resultsEl.appendChild(card);
+      var r = await item.fn({ hostReachable: hostReachable });
+      r.name = item.name;
+      results.push(r);
+      if (r.cls === 'OK' || (r.status != null && r.cls !== 'CORS FAILURE')) hostReachable = true;
+      card.replaceWith(renderCard(r));
+    }
+
+    renderSummary(results, probePath);
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run tests again';
+  }
+
+  // A hop is WORKS when the full plumbing is proven (HTTP response + JSON + CORS
+  // headers), even if the API answered 401 (missing API key) or a proxy refused
+  // with 403 — those are auth/policy issues, not connectivity failures.
+  function works(r) { return r && (r.cls === 'OK' || r.cls === 'REACHED (non-2xx)'); }
+
+  function renderSummary(results, probePath) {
+    var summaryEl = $('summary');
+    summaryEl.hidden = false;
+    var okCount = results.filter(works).length;
+    var netFails = results.filter(function (r) { return r.cls && r.cls.indexOf('NETWORK') === 0; }).length;
+    var corsFails = results.filter(function (r) { return r.cls === 'CORS FAILURE'; }).length;
+    var proxyFails = results.filter(function (r) { return r.cls === 'PROXY MISBEHAVIOR'; }).length;
+
+    var local = results[0];
+    var publics = results.slice(1).filter(function (r) { return r.cls !== 'SKIPPED'; });
+    var fallbackWorks = publics.some(works);
+    var localWorks = works(local);
+
+    var pass = localWorks && fallbackWorks;
+    $('summary-title').textContent = 'Summary — ' + (pass ? 'PASS' : 'FAIL');
+    var verdict = $('summary-verdict');
+    verdict.className = 'big ' + (pass ? 'ok' : 'fail');
+    if (pass) {
+      verdict.textContent = 'PASS — proxy plumbing works on every required hop (any non-2xx statuses are auth/policy, not connectivity).';
+    } else {
+      verdict.textContent = 'FAIL — ' + (localWorks ? 'plumbing works locally, but no public CORS fallback is usable' : 'same-origin server.mjs proxy cannot reach the API (is `node server.mjs` running on :3000?)') + '.';
+    }
+
+    var html = '';
+    html += '<p><b>Per-hop:</b> ' + okCount + ' plumbing-ok, ' + corsFails + ' CORS, ' + netFails + ' network, ' + proxyFails + ' proxy-misbehavior, ' + (results.length - okCount - corsFails - netFails - proxyFails) + ' other/skipped.</p>';
+    if (netFails > 0) html += '<p class="fail" style="color:var(--fail)">⚠ NETWORK failures detected (' + netFails + ' hop(s)) — DNS/TCP/TLS/timeout. Check your connection and that services are up.</p>';
+    if (corsFails > 0) html += '<p class="warn" style="color:var(--warn)">⚠ CORS failures detected (' + corsFails + ' hop(s)) — <code>access-control-allow-origin</code> missing ⇒ browsers block reading the response. This is the app\'s "NETWORK OR CORS ERROR".</p>';
+    if (proxyFails > 0) html += '<p class="warn" style="color:var(--warn)">⚠ Proxy misbehavior detected (' + proxyFails + ' hop(s)) — HTML/non-JSON bodies from the proxy endpoint.</p>';
+    html += '<p><b>Root-cause conclusion:</b> the Tickerbot API itself is ' + (results[4] && results[4].status != null ? 'reachable (HTTP ' + results[4].status + ')' : 'not reachable directly') +
+      ' but does not send <code>access-control-allow-origin</code>, and the public fallbacks are currently ' +
+      (fallbackWorks ? 'working' : 'unreliable (allorigins timing out/520-ing, corsproxy.io refusing requests)') + '. ' +
+      'When every hop fails in the browser, api.js throws <code>ApiError("network", "NETWORK OR CORS ERROR", 0)</code> and Settings shows ' +
+      '<b>CONNECTION FAILED / Error: NETWORK OR CORS ERROR / Status: N/A</b>.</p>' +
+      '<p><b>Fix:</b> run <code>npm run dev</code> and open <a href="' + esc(location.origin + '/') + '" style="color:#93c5fd">http://localhost:3000</a> — the same-origin server.mjs proxy bypasses CORS' +
+      (localWorks ? ' (verified working by hop 1 above).' : '.') + ' For hosted/StackBlitz use, configure a working custom proxy URL in Settings.</p>';
+    $('summary-detail').innerHTML = html;
+  }
+
+  $('run').addEventListener('click', run);
+  run();
+})();
+</script>
+</body>
+</html>
