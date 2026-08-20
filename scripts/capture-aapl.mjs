@@ -36,6 +36,17 @@ const configured = isConfigured(cfg);
 console.log(`[capture] baseURL=${cfg.baseURL} configured=${configured} hasApiKey=${hasKey} (key never printed)`);
 
 if (!hasKey) {
+  // Document the exact URL the app's OWN code path would request for AAPL
+  // (via buildUrl) even though a live authenticated capture is unavailable.
+  const probe = new MarketAPI({
+    baseURL: cfg.baseURL,
+    apiKey: '',
+    apiVersion: cfg.apiVersion,
+    stockEndpoint: cfg.stockEndpoint,
+    settings: cfg.settings,
+  });
+  const url = probe.buildUrl('/v2/tickers/AAPL');
+  console.log(`[capture] the app's own code path would request: getTickerQuote('AAPL') -> ${url}`);
   console.log('[capture] STOP: no stored Tickerbot API key in config/storage — cannot capture a real AAPL response; field names NOT fabricated.');
   process.exit(2);
 }

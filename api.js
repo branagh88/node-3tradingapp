@@ -71,6 +71,17 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Return the RESPONSE KEYS of a raw provider object (REDACTED — names only,
+// never values). Unwraps the same {ticker|data} nesting normalizeQuote reads so
+// an audit of a no-price response shows the exact fields that were inspected.
+function describeRawKeys(data) {
+  if (data == null || typeof data !== 'object') return [String(typeof data)];
+  if (Array.isArray(data)) return [`array(${data.length})`];
+  const item = (data.ticker && typeof data.ticker === 'object') ? data.ticker : data;
+  const nested = (item.data && typeof item.data === 'object') ? item.data : item;
+  return Object.keys(nested);
+}
+
 function toTimestamp(value) {
   if (value == null) return Date.now();
   const n = Number(value);
@@ -332,13 +343,62 @@ async _doFetch(path, options = {}) {
     apiErr.strategyErrors = strategyErrors;
     throw apiErr;
   }
+  // Response diagnostics (values REDACTED — top-level keys only, never the body
+  // and never the API key). Logs the resolved URL, HTTP status, response type
+  // (Content-Type) and top-level response keys for BOTH GET /v2/tickers/{ticker}
+  // and GET /v2/tickers?search=… through the app's own _doFetch path, so a live
+  // or offline capture can be audited.
+  try {
+    let contentType = null;
+    if (response && response.headers) {
+      contentType = typeof response.headers.get === 'function'
+        ? response.headers.get('content-type')
+        : (response.headers['content-type'] || response.headers['Content-Type'] || null);
+    }
+    const topKeys = Array.isArray(data)
+      ? `array(${data.length})`
+      : (data && typeof data === 'object' ? Object.keys(data) : `[${typeof data}]`);
+    console.log(`[api] ${method} ${safeUrl} -> status=${response.status} type=${contentType || 'n/a'} topKeys=${JSON.stringify(topKeys)}`);
+  } catch (diagErr) {
+    /* response diagnostics must never change request behaviour */
+  }
   return { data, meta: { status: response.status, url: safeUrl, strategy, strategyErrors, timestamp: Date.now() } };
 }
 
 async getTickerQuote(ticker) {
-  const sym = ticker.toUpperCase();
-  const { data, meta } = await this._doFetch(`/v2/tickers/${encodeURIComponent(sym)}`);
-  return this.normalizeQuote(data, sym, meta);
+  const sym = String(ticker || '').toUpperCase();
+  const enc = encodeURIComponent(sym);
+  // Stock Endpoint override (Settings > Stock Endpoint). When an explicit Stock
+  // Endpoint is configured it is honored as the override for THIS lookup — a
+  // {ticker} placeholder is substituted when the configured path carries one,
+  // otherwise the configured endpoint is used as-is. When it is BLANK (the
+  // default) we request the canonical directory row GET /v2/tickers/{ticker} —
+  // NEVER /quote.
+  const configured = this.config.stockEndpoint && String(this.config.stockEndpoint).trim();
+  const path = configured
+    ? (String(configured).includes('{ticker}')
+        ? String(configured).replace('{ticker}', enc)
+        : String(configured))
+    : `/v2/tickers/${enc}`;
+  const { data, meta } = await this._doFetch(path);
+  const quote = this.normalizeQuote(data, sym, meta);
+  // Missing-price guard: if normalization produced NO usable price (null),
+  // REPORT a parsing error showing the raw response keys — never silently turn
+  // a missing price into 0. This is surfaced (logged + attached to _debug) but
+  // NOT thrown, so callers that intentionally render a missing price as
+  // UNAVAILABLE (testConnection, watchlist cards) still receive the quote.
+  if (quote.price == null) {
+    const rawKeys = describeRawKeys(data);
+    const parsingError = {
+      kind: 'no_usable_price',
+      message: `Tickerbot response for ${sym} has no usable price; raw response keys: ${rawKeys.join(', ')}`,
+      responseKeys: rawKeys,
+    };
+    quote._debug = quote._debug || {};
+    quote._debug.parsingError = parsingError;
+    console.error(`[api] getTickerQuote ${sym}: no usable price in response (keys: ${rawKeys.join(', ')})`);
+  }
+  return quote;
 }
 
 async getSignals(ticker) {
@@ -392,9 +452,24 @@ async searchTickers(query, opts = {}) {
   if (query) params.set('search', String(query));
   if (opts.asset_class) params.set('asset_class', String(opts.asset_class));
   if (opts.limit != null) params.set('limit', String(opts.limit));
+  // Paginated directory envelope: when the caller passes back a cursor (from a
+  // previous page's next_cursor/cursor), forward it as a query param so the
+  // NEXT page is requested on the SAME GET /v2/tickers?search=… endpoint —
+  // never /v2/search. Opt-in, so existing callers that ignore pagination are
+  // unaffected.
+  if (opts.cursor) params.set('cursor', String(opts.cursor));
   const qs = params.toString();
-  const { data } = await this._doFetch(`/v2/tickers${qs ? `?${qs}` : ''}`);
-  return (Array.isArray(data) ? data : (data.results || [])).map((row) => this.normalizeSearchResult(row));
+  const { data, meta } = await this._doFetch(`/v2/tickers${qs ? `?${qs}` : ''}`);
+  const rows = Array.isArray(data) ? data : (data.results || data.items || data.tickers || []);
+  const nextCursor = (data && typeof data === 'object' && !Array.isArray(data))
+    ? (data.next_cursor ?? data.cursor ?? null)
+    : null;
+  const result = rows.map((row) => this.normalizeSearchResult(row));
+  // Expose pagination without changing the array contract callers rely on
+  // (length, map, spread). cursor carries the NEXT page's cursor (or null).
+  Object.defineProperty(result, 'cursor', { value: nextCursor, enumerable: false, writable: true });
+  Object.defineProperty(result, '_meta', { value: meta, enumerable: false, writable: true });
+  return result;
 }
 
 async getQuote(symbol, { type } = {}) {
