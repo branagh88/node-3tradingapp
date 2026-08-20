@@ -233,8 +233,13 @@ export class AssetsController {
     const change = quote.changePercent ?? quote.percentChange ?? quote.changePct;
     const volume = quote.volume;
 
-    const hasPrice = Number.isFinite(Number(price));
-    const hasChange = Number.isFinite(Number(change));
+    // null-vs-zero gate: normalizeQuote() returns null when a field is MISSING
+    // and 0 for a genuine provider zero. Number(null) === 0, so a bare
+    // Number.isFinite(Number(price)) check would render $0.00 for a missing
+    // price. Gate on `!= null` FIRST so missing renders UNAVAILABLE while a
+    // real 0 still renders $0.00 — the distinction stays visible in the UI.
+    const hasPrice = price != null && Number.isFinite(Number(price));
+    const hasChange = change != null && Number.isFinite(Number(change));
 
     const changeClass =
       hasChange && Number(change) > 0 ? 'pos' :

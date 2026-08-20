@@ -269,7 +269,7 @@ async function testConnection() {
        Strategy/Proxy: <code>${esc(strategy)}</code><br>
        Endpoint: <code>${esc(debug.url || '')}</code><br>
        Status: 200 OK<br>
-       Symbol: ${esc(res.symbol)} | Price: ${esc(res.price)}
+       Symbol: ${esc(res.symbol)} | Price: ${res.price != null && Number.isFinite(Number(res.price)) ? esc(res.price) : 'UNAVAILABLE'}
      </div>${fallbackNote}
    `;
  } catch (err) {
@@ -423,7 +423,7 @@ function wireSearch() {
      return;
    }
    try {
-     const scanResults = await api.runScan({ query: q });
+     const scanResults = await api.searchTickers(q);
      if (!scanResults.length) {
        resultsEl.innerHTML = '<div class="empty-state"><p class="empty-sub">No matching assets found.</p></div>';
        return;
