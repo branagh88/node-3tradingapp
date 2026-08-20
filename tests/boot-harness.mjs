@@ -249,6 +249,111 @@ await new Promise((r) => setTimeout(r, 100));
 check('router reveals #screen-settings after saved-watchlist boot', !C.document.querySelector('#screen-settings').hidden);
 
 // ---------------------------------------------------------------------------
+// Scenario D — consumer hardening: watchlist cards must render a REAL
+// metrics.price as the actual number, render UNAVAILABLE/— for MISSING
+// fields, and keep a genuine provider 0 visible ($0.00) — the null-vs-zero
+// distinction must survive the render path. Regression guard for
+// `Number(null) === 0` → hasPrice=true → "$0.00" for a missing price.
+// ---------------------------------------------------------------------------
+console.log('\nboot harness [consumer: watchlist price/change/volume]:');
+const D = await bootScenario('consumer-hardening', {
+  beforeDispatch(dom) {
+    const wl = [
+      { id: 'AAPL', symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', exchange: 'NASDAQ', currency: 'USD', quote: { price: 232.87, changePercent: 1.25, volume: 51200000 }, updatedAt: Date.now() },
+      { id: 'MISSING', symbol: 'MISSING', name: 'Missing Co.', type: 'stock', exchange: '—', currency: 'USD', quote: { price: null, changePercent: null, volume: null }, updatedAt: Date.now() },
+      { id: 'ZERO', symbol: 'ZERO', name: 'Zero Co.', type: 'stock', exchange: '—', currency: 'USD', quote: { price: 0, changePercent: 0, volume: 0 }, updatedAt: Date.now() },
+    ];
+    dom.window.localStorage.setItem('market-intelligence:watchlist', JSON.stringify(wl));
+    dom.window.location.hash = '#/watchlist';
+  },
+});
+
+check('consumer hardening: boot without error', !D.moduleEvalError && !D.bootError, `-> ${(D.moduleEvalError || D.bootError)?.stack || (D.moduleEvalError || D.bootError)}`);
+const dCards = [...D.document.querySelectorAll('#watchlist-grid .asset-card')];
+check('consumer hardening: 3 cards rendered', dCards.length === 3, `-> cards=${dCards.length}`);
+
+const dAapl = D.document.querySelector('[data-open-symbol="AAPL"]');
+const dMissing = D.document.querySelector('[data-open-symbol="MISSING"]');
+const dZero = D.document.querySelector('[data-open-symbol="ZERO"]');
+check('consumer hardening: real price renders actual number ($232.87)', dAapl && dAapl.querySelector('.asset-card__price')?.textContent.trim() === '$232.87', `-> ${dAapl && dAapl.querySelector('.asset-card__price')?.textContent.trim()}`);
+check('consumer hardening: real change renders +1.25%', dAapl && dAapl.querySelector('.asset-card__meta span')?.textContent === '+1.25%', `-> ${dAapl && dAapl.querySelector('.asset-card__meta span')?.textContent}`);
+check('consumer hardening: real volume renders 51.20M', dAapl && [...dAapl.querySelectorAll('.asset-card__meta span')][1]?.textContent === 'Vol: 51.20M', `-> ${dAapl && [...dAapl.querySelectorAll('.asset-card__meta span')][1]?.textContent}`);
+check('consumer hardening: MISSING price renders UNAVAILABLE (not $0.00)', dMissing && dMissing.querySelector('.asset-card__price')?.textContent.trim() === 'UNAVAILABLE', `-> ${dMissing && dMissing.querySelector('.asset-card__price')?.textContent.trim()}`);
+check('consumer hardening: MISSING change renders —', dMissing && dMissing.querySelector('.asset-card__meta span')?.textContent === '—', `-> ${dMissing && dMissing.querySelector('.asset-card__meta span')?.textContent}`);
+check('consumer hardening: MISSING volume renders Vol: —', dMissing && [...dMissing.querySelectorAll('.asset-card__meta span')][1]?.textContent === 'Vol: —', `-> ${dMissing && [...dMissing.querySelectorAll('.asset-card__meta span')][1]?.textContent}`);
+check('consumer hardening: MISSING card never shows $0.00', dMissing && !dMissing.textContent.includes('$0.00'), `-> ${dMissing && dMissing.textContent}`);
+check('consumer hardening: genuine 0 renders $0.00 (distinction preserved)', dZero && dZero.querySelector('.asset-card__price')?.textContent.trim() === '$0.00', `-> ${dZero && dZero.querySelector('.asset-card__price')?.textContent.trim()}`);
+check('consumer hardening: genuine 0 change renders 0.00%', dZero && dZero.querySelector('.asset-card__meta span')?.textContent === '0.00%', `-> ${dZero && dZero.querySelector('.asset-card__meta span')?.textContent}`);
+check('consumer hardening: genuine 0 volume renders Vol: 0', dZero && [...dZero.querySelectorAll('.asset-card__meta span')][1]?.textContent === 'Vol: 0', `-> ${dZero && [...dZero.querySelectorAll('.asset-card__meta span')][1]?.textContent}`);
+
+// ---------------------------------------------------------------------------
+// Scenario E — Settings > Test Connection renders the REAL normalized
+// metrics.price through the app's OWN TickerbotAPI → normalizeQuote path
+// (fetch stubbed offline with the same response shape the live
+// /v2/tickers/AAPL returns). A missing price must render UNAVAILABLE while a
+// real value (and a genuine 0) must render the actual number.
+// ---------------------------------------------------------------------------
+console.log('\nboot harness [consumer: testConnection Price render]:');
+async function runTestConnectionPriceCheck(label, payload, expectedContains, forbiddenContains) {
+  const S = await bootScenario(label);
+  S.window.location.hash = '#/settings';
+  await new Promise((r) => setTimeout(r, 100));
+  const base = S.document.querySelector('[name="baseURL"]');
+  const key = S.document.querySelector('[name="apiKey"]');
+  if (base) base.value = 'https://api.tickerbot.io';
+  if (key) key.value = 'tb_test_dummykey';
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  let clickError = null;
+  try {
+    S.document.querySelector('#settings-test').click();
+  } catch (err) { clickError = err; }
+  await new Promise((r) => setTimeout(r, 250));
+  globalThis.fetch = realFetch;
+
+  const res = S.document.querySelector('#settings-test-result');
+  const text = res ? res.textContent : '';
+  check(`testConnection ${label}: clicked without throw`, !clickError, clickError ? `-> ${clickError.stack || clickError}` : '');
+  check(`testConnection ${label}: CONNECTION SUCCESSFUL shown`, text.includes('CONNECTION SUCCESSFUL'), `-> ${text.slice(0, 120)}`);
+  check(`testConnection ${label}: Price shows ${expectedContains}`, text.includes(expectedContains), `-> ${text}`);
+  if (forbiddenContains) {
+    check(`testConnection ${label}: does NOT show ${forbiddenContains}`, !text.includes(forbiddenContains), `-> ${text}`);
+  }
+}
+
+await runTestConnectionPriceCheck(
+  'nested-metrics-price',
+  {
+    ticker: {
+      symbol: 'AAPL', name: 'Apple Inc.', asset_class: 'EQUITY',
+      as_of: '2026-08-19T15:00:00Z',
+      metrics: { price: 250.5, day_change: 3.25, day_change_pct: 1.31, volume: 50123456, market_cap: 3800000000000 },
+      signals: { rsi_14: 61.2, state_flags: ['in_uptrend'] },
+    },
+  },
+  'Price: 250.5',
+  'Price: UNAVAILABLE'
+);
+
+await runTestConnectionPriceCheck(
+  'real-zero',
+  { symbol: 'AAPL', metrics: { price: 0 } },
+  'Price: 0',
+  'Price: UNAVAILABLE'
+);
+
+await runTestConnectionPriceCheck(
+  'missing-price',
+  { symbol: 'AAPL', name: 'Apple Inc.' },
+  'Price: UNAVAILABLE',
+  'Price: $0'
+);
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0 ? '\nBOOT HARNESS PASS' : `\nBOOT HARNESS FAIL (${failures} failure(s))`);
 clearTimeout(bailTimer);
 try { server.kill('SIGTERM'); } catch { /* noop */ }

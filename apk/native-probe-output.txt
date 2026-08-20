@@ -1,3 +1,6 @@
+# Regenerated 2026-08-20T12:07:38Z for fe26a19a builder verification run
+# Driving the real com.getcapacitor.plugin.http.CapacitorHttpUrlConnection source
+# from node_modules/@capacitor-community/http (the class the APK binds to).
 === RUNTIME NATIVE HTTP PROBE (CapacitorHttpUrlConnection) ===
 drivenClass=com.getcapacitor.plugin.http.CapacitorHttpUrlConnection
 method=GET url=https://api.tickerbot.io/v2/tickers/AAPL
@@ -13,11 +16,11 @@ headers: Accept: application/json, Content-Type: application/json, Authorization
 
 --- REAL HTTP RESPONSE (native path) ---
 HTTP status=401
-response body={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_1424babecdd3f0b0afbe"}
+response body={"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.","request_id":"req_d0e1db6b5f03b3a79324"}
 
 --- selected response headers ---
   Content-Type: application/json; charset=utf-8
-  Date: Wed, 19 Aug 2026 18:23:11 GMT
+  Date: Thu, 20 Aug 2026 12:07:33 GMT
   Server: nginx/1.24.0 (Ubuntu)
   Access-Control-Allow-Origin: null
   X-Request-Id: null

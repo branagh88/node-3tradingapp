@@ -91,7 +91,9 @@ function toEpochSeconds(value) {
 }
 
 function resolveType(raw, symbol) {
-  const t = raw && (raw.type || raw.assetType || raw.securityType);
+  // asset_class is the canonical Tickerbot type field — read it FIRST so it wins
+  // over the legacy aliases (type/assetType/securityType) whenever present.
+  const t = raw && (raw.asset_class || raw.type || raw.assetType || raw.securityType);
   if (typeof t === 'string') {
     const up = t.toUpperCase();
     if (up.includes('CRYPTO')) return 'crypto';
@@ -376,6 +378,25 @@ async runScan(criteria = {}) {
   }
 }
 
+// Search the Tickerbot ticker directory: GET /v2/tickers?search=…&asset_class=…&limit=…
+// (the canonical search endpoint — NOT /v2/search which 404s, and distinct from the
+// market-wide POST /v2/scan). The response is an ENVELOPE { as_of, count, next_cursor,
+// results: [...] } — never a bare array — so unwrap data.results with the same pattern
+// runScan uses. Slim directory rows carry NO currency column (ticker, name, asset_class,
+// asset_type, exchange, market_cap, price, day_change_pct); normalizeSearchResult leaves
+// currency null in that case — never fabricated, never defaulted to 0. Errors (401/403,
+// network, timeout) are NOT swallowed into a silent [] so they propagate to the caller's
+// try/catch (wireSearch shows the error banner) instead of masking a bad key.
+async searchTickers(query, opts = {}) {
+  const params = new URLSearchParams();
+  if (query) params.set('search', String(query));
+  if (opts.asset_class) params.set('asset_class', String(opts.asset_class));
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  const { data } = await this._doFetch(`/v2/tickers${qs ? `?${qs}` : ''}`);
+  return (Array.isArray(data) ? data : (data.results || [])).map((row) => this.normalizeSearchResult(row));
+}
+
 async getQuote(symbol, { type } = {}) {
   return this.getTickerQuote(symbol);
 }
@@ -387,44 +408,79 @@ async getQuote(symbol, { type } = {}) {
 normalizeQuote(raw, ticker, meta) {
   const item = (raw && typeof raw === 'object') ? (raw.ticker || raw.data || raw) : (raw || {});
   const symbol = String(ticker || item.symbol || item.ticker || '').toUpperCase();
-  // Alias tables below reflect BOTH the legacy/common quote conventions (camelCase,
-  // Yahoo/Finviz/AlphaVantage-style) AND the real field names published by the
-  // Tickerbot /v2/tickers/{ticker} row — tickerbot.io/docs/schema.json (the live
-  // endpoint returns one flat row whose keys are exactly the schema's bare names:
-  // `price`, `previous_close`, `day_change`, `day_change_pct`, `session_open`,
-  // `session_high`, `session_low`, `volume_today`, `currency_name`, `exchange`,
-  // `exchange_mic`, `market_cap`). Values are only READ when present — never
-  // fabricated — and `price ?? 0` remains as the last-resort fallback (it is the
-  // symptom-carrier, not the bug; the bug was that the real provider field names
-  // were not aliased, so a present price fell through to 0).
-  const price = toNumber(item.price ?? item.lastPrice ?? item.last ?? item.close ?? item.c ?? item.regularMarketPrice ?? item.regularMarketLast ?? null);
+  // Canonical-over-alias priority. The canonical nested Tickerbot /v2/tickers
+  // {ticker} row (tickerbot.io/docs/schema.json) groups quote metrics under
+  // `item.metrics.*`, technicals under `item.signals.*`, plus `item.asset_class`
+  // and `item.as_of`. Every canonical read is tried FIRST (?? — a literal
+  // canonical 0 still wins and is never confused with "missing"); when absent
+  // we fall back to the existing legacy aliases (camelCase, Yahoo/Finviz/Alpha
+  // Vantage-style AND the real flat schema names: `price`, `previous_close`,
+  // `day_change`, `day_change_pct`, `session_open`, `session_high`,
+  // `session_low`, `volume_today`, `currency_name`, `exchange`, `exchange_mic`,
+  // `market_cap`). Values are only READ when present — never fabricated.
+  //
+  // Missing-vs-zero policy: toNumber() returns null for a value that is absent
+  // OR present-but-unparsable, and we do NOT fall back to 0. The returned quote
+  // therefore keeps null so callers (watchlist cards, analysis, UI) can tell a
+  // genuinely missing field apart from a real zero. A provider `0` stays 0.
+  const price = toNumber(item.metrics?.price ?? item.price ?? item.lastPrice ?? item.last ?? item.close ?? item.c ?? item.regularMarketPrice ?? item.regularMarketLast ?? null);
   const previousClose = toNumber(item.previousClose ?? item.prevClose ?? item.previousClosePrice ?? item.previous_close ?? item.regularMarketPreviousClose ?? null);
-  const change = toNumber(item.change ?? item.todaysChange ?? item.day_change ?? (price != null && previousClose != null ? price - previousClose : null));
-  const changePercent = toNumber(item.changePercent ?? item.todaysChangePerc ?? item.changesPercentage ?? item.percentChange ?? item.day_change_pct ?? item.regularMarketChangePercent ?? null);
+  const change = toNumber(item.metrics?.day_change ?? item.day_change ?? item.change ?? item.todaysChange ?? (price != null && previousClose != null ? price - previousClose : null));
+  const changePercent = toNumber(item.metrics?.day_change_pct ?? item.day_change_pct ?? item.changePercent ?? item.todaysChangePerc ?? item.changesPercentage ?? item.percentChange ?? item.regularMarketChangePercent ?? null);
   const type = resolveType(item, symbol);
   const currency = item.currency ?? item.quoteCurrency ?? item.currencyCode ?? item.currency_name ?? null;
   const exchange = item.exchange ?? item.exchangeName ?? item.mic ?? item.exchange_mic ?? item.fullExchangeName ?? null;
+  const volume = toNumber(item.metrics?.volume ?? item.volume_today ?? item.volume ?? item.v ?? item.min_day_accumulated_volume ?? item.regularMarketVolume ?? null);
+  const high = toNumber(item.high ?? item.h ?? item.session_high ?? item.regularMarketDayHigh ?? null);
+  const low = toNumber(item.low ?? item.l ?? item.session_low ?? item.regularMarketDayLow ?? null);
+  const open = toNumber(item.open ?? item.o ?? item.session_open ?? item.regularMarketOpen ?? null);
+  const marketCap = toNumber(item.metrics?.market_cap ?? item.market_cap ?? item.marketCap ?? item.regularMarketMarketCap ?? null);
+
+  // Signals: preserve and normalize the whole canonical `item.signals` object.
+  // Every non-standard key keeps flowing through (spread), while the standardized
+  // indicator keys are normalized with toNumber() and fall back to the flat row's
+  // own fields when missing from signals. state_flags stays available under
+  // signals.state_flags so Marketanalysis.js and the UI can read it. A missing or
+  // unparsable indicator is null (never 0); a real 0 stays 0.
+  const rawSignals = (item.signals && typeof item.signals === 'object') ? item.signals : {};
+  const signals = {
+    ...rawSignals,
+    sma_20: toNumber(rawSignals.sma_20 ?? item.sma_20 ?? null),
+    sma_50: toNumber(rawSignals.sma_50 ?? item.sma_50 ?? null),
+    sma_200: toNumber(rawSignals.sma_200 ?? item.sma_200 ?? null),
+    rsi_14: toNumber(rawSignals.rsi_14 ?? item.rsi_14 ?? null),
+    macd_line: toNumber(rawSignals.macd_line ?? item.macd_line ?? null),
+    macd_signal: toNumber(rawSignals.macd_signal ?? item.macd_signal ?? null),
+    macd_histogram: toNumber(rawSignals.macd_histogram ?? item.macd_histogram ?? null),
+    bb_upper: toNumber(rawSignals.bb_upper ?? item.bb_upper ?? item.bollinger_upper ?? null),
+    bb_lower: toNumber(rawSignals.bb_lower ?? item.bb_lower ?? item.bollinger_lower ?? null),
+    atr_14: toNumber(rawSignals.atr_14 ?? item.atr_14 ?? null),
+    short_interest_pct: toNumber(rawSignals.short_interest_pct ?? item.short_interest_pct ?? null),
+    state_flags: rawSignals.state_flags ?? item.state_flags ?? null,
+  };
 
   return {
     symbol,
-    name: item.name || item.companyName || item.shortName || item.longName || symbol,
+    // Canonical `name` wins; legacy aliases only when it is absent.
+    name: item.name ?? item.companyName ?? item.shortName ?? item.longName ?? symbol,
     type,
     assetType: type,
     exchange,
     currency,
-    price: price ?? 0,
-    change: change ?? 0,
-    changePercent: changePercent ?? 0,
+    price,
+    change,
+    changePercent,
     // Back-compat alias: the smoke contract and some UIs read `percentChange`.
-    percentChange: changePercent ?? 0,
-    volume: toNumber(item.volume ?? item.v ?? item.volume_today ?? item.min_day_accumulated_volume ?? item.regularMarketVolume ?? null) ?? 0,
-    high: toNumber(item.high ?? item.h ?? item.session_high ?? item.regularMarketDayHigh ?? null) ?? 0,
-    low: toNumber(item.low ?? item.l ?? item.session_low ?? item.regularMarketDayLow ?? null) ?? 0,
-    open: toNumber(item.open ?? item.o ?? item.session_open ?? item.regularMarketOpen ?? null) ?? 0,
+    percentChange: changePercent,
+    volume,
+    high,
+    low,
+    open,
     previousClose,
-    marketCap: toNumber(item.marketCap ?? item.market_cap ?? item.regularMarketMarketCap ?? null) ?? 0,
-    signals: item.signals || {},
-    timestamp: toTimestamp(item.updated ?? item.timestamp ?? item.ts ?? item.t ?? item.date ?? Date.now()),
+    marketCap,
+    signals,
+    // Canonical `as_of` wins, then `updated`, then the legacy aliases.
+    timestamp: toTimestamp(item.as_of ?? item.updated ?? item.timestamp ?? item.ts ?? item.t ?? item.date ?? Date.now()),
     _debug: meta
   };
 }

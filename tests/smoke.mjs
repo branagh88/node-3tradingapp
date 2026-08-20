@@ -111,6 +111,97 @@ ok('quote Tickerbot schema row price', q5.price === 232.87 && q5.percentChange =
 ok('quote Tickerbot schema row high/low/volume', q5.high === 233.5 && q5.low === 230.2 && q5.volume === 51200000);
 ok('quote Tickerbot schema row currency/exchange/marketCap', q5.currency === 'USD' && q5.exchange === 'NASDAQ' && q5.marketCap === 3520000000000);
 
+// q6 — canonical NESTED Tickerbot ticker row (ticker.{metrics.*, signals.*,
+// asset_class, as_of, name}). Canonical fields must WIN over the same-named
+// legacy aliases, and the whole signals object (including state_flags) must be
+// preserved and exposed on the quote for Marketanalysis.js and the UI.
+const q6 = api.normalizeQuote({
+  symbol: 'AAPL',
+  name: 'Apple Inc. (canonical)',
+  companyName: 'Apple Inc. (alias)', // legacy alias that must LOSE to canonical name
+  exchange: 'NASDAQ',
+  asset_class: 'EQUITY',
+  as_of: '2026-08-19T15:00:00Z',
+  metrics: {
+    price: 250.5,
+    day_change: 3.25,
+    day_change_pct: 1.31,
+    volume: 50123456,
+    market_cap: 3800000000000,
+  },
+  // legacy aliases that must LOSE to canonical metrics.*/as_of/asset_class
+  price: 232.87,
+  day_change: 2.87,
+  day_change_pct: 1.25,
+  volume_today: 51200000,
+  market_cap: 3520000000000,
+  updated: '2026-08-19T14:00:00Z',
+  type: 'STOCK',
+  signals: {
+    sma_20: 240.1,
+    sma_50: 235.8,
+    sma_200: 220.4,
+    rsi_14: 61.2,
+    macd_line: 1.05,
+    macd_signal: 0.85,
+    macd_histogram: 0.2,
+    bb_upper: 255.1,
+    bb_lower: 225.3,
+    atr_14: 3.4,
+    short_interest_pct: 0.8,
+    state_flags: ['in_uptrend', 'macd_above_signal'],
+  },
+}, 'AAPL');
+ok('quote canonical nested metrics.price wins over alias', q6.price === 250.5);
+ok('quote canonical metrics day_change/day_change_pct win', q6.change === 3.25 && q6.changePercent === 1.31);
+ok('quote canonical metrics volume/market_cap win', q6.volume === 50123456 && q6.marketCap === 3800000000000);
+ok('quote canonical asset_class -> type', q6.type === 'stock' && q6.assetType === 'stock');
+ok('quote canonical as_of -> timestamp', new Date(q6.timestamp).toISOString().startsWith('2026-08-19T15:00:00'));
+ok('quote canonical name wins', q6.name === 'Apple Inc. (canonical)');
+ok('quote signals preserved (sma/rsi/macd)', q6.signals.sma_20 === 240.1 && q6.signals.sma_50 === 235.8 && q6.signals.sma_200 === 220.4 && q6.signals.rsi_14 === 61.2 && q6.signals.macd_line === 1.05 && q6.signals.macd_signal === 0.85 && q6.signals.macd_histogram === 0.2);
+ok('quote signals preserved (bb/atr/short_interest)', q6.signals.bb_upper === 255.1 && q6.signals.bb_lower === 225.3 && q6.signals.atr_14 === 3.4 && q6.signals.short_interest_pct === 0.8);
+ok('quote signals.state_flags preserved', Array.isArray(q6.signals.state_flags) && q6.signals.state_flags[0] === 'in_uptrend' && q6.signals.state_flags[1] === 'macd_above_signal');
+
+// q7 — missing canonical fields must be null (NOT 0) so the UI can tell a
+// missing value apart from a real zero. No provider value at all here.
+const q7 = api.normalizeQuote({ symbol: 'TST', name: 'Test Co.' }, 'TST');
+ok('quote missing price -> null (not 0)', q7.price === null);
+ok('quote missing change/changePercent -> null', q7.change === null && q7.changePercent === null && q7.percentChange === null);
+ok('quote missing volume/high/low/open/marketCap -> null', q7.volume === null && q7.high === null && q7.low === null && q7.open === null && q7.marketCap === null);
+
+// q8 — genuine parsed zero values stay 0 (canonical metrics.* and flat fields).
+const q8 = api.normalizeQuote({
+  symbol: 'ZERO',
+  metrics: { price: 0, day_change: 0, day_change_pct: 0, volume: 0, market_cap: 0 },
+  high: 0,
+  low: 0,
+  open: 0,
+  signals: { sma_20: 0, rsi_14: 0, macd_line: 0 },
+}, 'ZERO');
+ok('quote parsed zero stays 0 (canonical metrics)', q8.price === 0 && q8.change === 0 && q8.changePercent === 0 && q8.volume === 0 && q8.marketCap === 0);
+ok('quote parsed zero stays 0 (high/low/open)', q8.high === 0 && q8.low === 0 && q8.open === 0);
+ok('quote signals parsed zero stays 0', q8.signals.sma_20 === 0 && q8.signals.rsi_14 === 0 && q8.signals.macd_line === 0);
+
+// q9 — a canonical field that EXISTS but fails to parse yields null (never 0),
+// and the canonical value still wins over the alias even when unparsable.
+const q9 = api.normalizeQuote({ symbol: 'BAD', metrics: { price: 'not-a-number', volume: 'abc' }, price: 42 }, 'BAD');
+ok('quote unparsable canonical price -> null (canonical present)', q9.price === null);
+ok('quote unparsable canonical volume -> null (canonical present)', q9.volume === null);
+
+// q10 — no canonical metrics.*: legacy flat aliases still work, and missing
+// signal keys fall back to the flat row's own fields.
+const q10 = api.normalizeQuote({
+  symbol: 'FLAT',
+  price: 99.5,
+  day_change_pct: 0.5,
+  volume_today: 12345,
+  rsi_14: 55,
+  bollinger_upper: 105.2,
+  bollinger_lower: 93.8,
+}, 'FLAT');
+ok('quote flat aliases still work without metrics/signals', q10.price === 99.5 && q10.changePercent === 0.5 && q10.volume === 12345);
+ok('quote signals fall back to flat row fields', q10.signals.rsi_14 === 55 && q10.signals.bb_upper === 105.2 && q10.signals.bb_lower === 93.8);
+
 const candlesFlat = api.normalizeCandles([
   { date: '2026-01-03', open: 2, high: 5, low: 1, close: 4, volume: 100 },
   { date: '2026-01-01', open: 1, high: 3, low: 0.5, close: 2, volume: 90 },
@@ -138,6 +229,29 @@ const searchList = [
   api.normalizeSearchResult({ symbol: 'AAPL', exchange: 'NASDAQ' }),
 ];
 ok('search type heuristic crypto/stock', searchList[0].type === 'crypto' && searchList[1].type === 'stock');
+
+// searchTickers — canonical /v2/tickers ENVELOPE unwrap + slim-row mapping (OFFLINE).
+// The canonical search endpoint returns { as_of, count, next_cursor, results: [...] },
+// never a bare array, and slim directory rows carry NO currency — so the mapped row must
+// keep currency null (never fabricated, never defaulted to 0).
+const expectedSearchRow = { symbol: 'AAPL', name: 'Apple Inc.', type: 'stock', exchange: 'NASDAQ', currency: null };
+const envRow = api.normalizeSearchResult({ ticker: 'aapl', name: 'Apple Inc.', asset_type: 'EQUITY', exchange: 'NASDAQ' });
+ok('search slim envelope row normalizes to canonical shape (currency null)', JSON.stringify(envRow) === JSON.stringify(expectedSearchRow));
+
+// searchTickers() unwraps .results and maps each row through normalizeSearchResult.
+// _doFetch is stubbed with a canned envelope, so this is fully offline (no network call).
+const stubApi = new MarketAPI({ baseURL: 'https://api.example.com', apiKey: '' });
+stubApi._doFetch = async () => ({
+  data: {
+    as_of: '2026-08-20T12:00:00Z',
+    count: 1,
+    next_cursor: null,
+    results: [{ ticker: 'aapl', name: 'Apple Inc.', asset_type: 'EQUITY', exchange: 'NASDAQ' }],
+  },
+  meta: { status: 200 },
+});
+const envResults = await stubApi.searchTickers('aapl');
+ok('searchTickers unwraps envelope results + maps slim rows', envResults.length === 1 && JSON.stringify(envResults[0]) === JSON.stringify(expectedSearchRow));
 
 // ---------------------------------------------------------------------------
 // 3. Endpoint resolution (B4)

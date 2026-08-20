@@ -1,0 +1,13 @@
+# Live AAPL capture evidence — 2026-08-20 (fe26a19a builder verification run)
+# `node scripts/capture-aapl.mjs` (app's OWN TickerbotAPI path, stored key from config/storage)
+#
+# Output (verbatim, key never printed):
+#   [capture] baseURL=YOUR_API_BASE_URL configured=false hasApiKey=false (key never printed)
+#   [capture] STOP: no stored Tickerbot API key in config/storage — cannot capture a real AAPL response; field names NOT fabricated.
+#   exit code = 2
+#
+# CONCLUSION: a live capture is IMPOSSIBLE on this box — no tb_test_*/tb_live_* key
+# has ever been saved to config/storage. Field names were NOT fabricated. See
+# DIAGNOSTIC_REPORT.md (fe26a19a section) + native-probe-output.txt for the Android
+# native-path evidence (transport reaches api.tickerbot.io, HTTP 401 auth gate, not
+# CORS-blocked) and tests/smoke.mjs q5-q10 for the offline normalizeQuote coverage.

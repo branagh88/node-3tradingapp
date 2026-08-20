@@ -673,3 +673,58 @@ in the APK) against the live server on a desktop JVM, plus bytecode/DEX/bundled-
 verification. Install on the studio machine
 (`"$ANDROID_HOME/platform-tools/adb" install -r apk/market-intelligence-debug.apk`)
 and supply a valid `tb_test_*`/`tb_live_*` key in Settings.
+
+---
+
+## fe26a19a verification run (2026-08-20) — AAPL capture limitation + UI consumer hardening
+
+### Live AAPL capture via app's own TickerbotAPI path
+`node scripts/capture-aapl.mjs` → **exit 2**: no stored Tickerbot API key in
+config/storage (`baseURL=YOUR_API_BASE_URL configured=false hasApiKey=false`). A live
+capture of the real `/v2/tickers/AAPL` payload through TickerbotAPI is therefore
+**impossible on this box — field names were NOT fabricated**. Once a real
+`tb_test_*`/`tb_live_*` key is saved in Settings, rerun the script to get the live
+nested-vs-flat ground truth. Until then, the normalized shape is covered offline by
+`tests/smoke.mjs` q5 (flat Tickerbot row) and q6–q10 (canonical nested
+`metrics.*`/`signals.*`/`asset_class`/`as_of`, canonical-over-alias, missing→null vs
+real-0, unparsable→null).
+
+### Android native path re-probed live (2026-08-20 12:07 UTC)
+`apk/native-probe-output.txt` regenerated. Driving the REAL
+`com.getcapacitor.plugin.http.CapacitorHttpUrlConnection` source (the class the APK
+binds to) against the LIVE server:
+`GET https://api.tickerbot.io/v2/tickers/AAPL` → **HTTP 401**
+`{"error":"unauthenticated","message":"Malformed API key. Expected tb_test_* or tb_live_*.",...}`
+with **no Origin header** → the native path reaches api.tickerbot.io and is **NOT
+CORS-blocked** (contrast: WebView `window.fetch` → status 0/"N/A"). The
+`HttpRequestHandler` probe (patched @capacitor-community/http source) also returns real
+HTTP 401 for every request shape (no NPE) — transport is proven end-to-end; only a
+valid key is missing.
+
+### Source changes this phase (networking untouched)
+- `app.js` `testConnection`: `Price:` now renders the actual number for a real
+  `metrics.price` (including a genuine 0) and `UNAVAILABLE` for null/missing — never
+  an empty string or `$0`.
+- `assets.js` watchlist `_renderCard`: `hasPrice`/`hasChange` gate on `!= null` FIRST
+  (fixes `Number(null) === 0` → `$0.00` for a MISSING price). Missing price →
+  `UNAVAILABLE`, missing change/volume → `—`; real 0 → `$0.00` / `0.00%` / `Vol: 0`.
+  The null-vs-zero distinction introduced by `normalizeQuote()` is now preserved at the
+  UI layer.
+- `tests/boot-harness.mjs`: new Scenario D (watchlist card render: real price, MISSING
+  → UNAVAILABLE/—, genuine 0 → $0.00) and Scenario E (Settings Test Connection renders
+  `Price: 250.5` from a nested metrics payload, `Price: 0` for a real zero, and
+  `Price: UNAVAILABLE` for a missing price through the app's own TickerbotAPI path).
+- `www/api.js`, `www/app.js`, `www/assets.js` re-synced (diff clean).
+
+### Verification gates (all PASS)
+`npm run smoke` PASS · `npm run test:boot` PASS (incl. scenarios D + E) ·
+`npm run build` PASS.
+
+### Honest limitation (unchanged)
+No adb device / emulator / AVD on this box — the on-device Settings test must run on
+the studio machine:
+`"$ANDROID_HOME/platform-tools/adb" install -r apk/market-intelligence-debug.apk`,
+open Settings, set base URL `https://api.tickerbot.io`, save the real key, tap
+**Test connection**. Expected result with the rebuilt APK: "CONNECTION SUCCESSFUL …
+Price: <real metrics.price>" (or UNAVAILABLE if the key is valid but the row has no
+price) — never `$0.00` for a present-but-null field.
