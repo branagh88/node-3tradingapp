@@ -3,6 +3,7 @@ import { on, logger, esc, fmtPrice, fmtPct, fmtVolume, fmtTime } from './utils.j
 import { storage } from './storage.js';
 import { loadConfig, saveConfig, isConfigured, hasApiKey, configStatus, isValidHttpUrl, API_CONFIG, DEFAULTS } from './config.js';
 import { getApiKey, setApiKey, clearApiKey, migrateLegacyApiKey } from './secure-store.js';
+import { BUILD_INFO } from './build-info.js';
 import { TickerbotAPI } from './api.js'; 
 import { MarketData } from './market-data.js';
 import { AssetsController } from './assets.js';
@@ -251,6 +252,8 @@ async function fillSettingsForm() {
  set('wsEndpoint', cfg.wsEndpoint);
  const capSearch = document.querySelector('[name="capabilitiesSearch"]');
  if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
+ const buildEl = document.getElementById('settings-build');
+ if (buildEl) buildEl.textContent = `Build: ${BUILD_INFO.commit} (${BUILD_INFO.builtAt})`;
  renderSettingsStatusBanner(cfg, storedKeyPresent);
 }
 
