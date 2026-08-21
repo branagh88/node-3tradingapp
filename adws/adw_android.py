@@ -38,7 +38,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="android_package", kind="agent", owner="android-developer",
                                description="Set up Capacitor, package the web build, sync Android, "
-                                           "build a debug APK when the SDK is available")) as ph:
+                                           "build a debug APK when the SDK is available",
+                               gates=[gates.artifacts_exist, gates.android_verified])) as ph:
         call = ph.agent(agent="android-developer", envelope=AndroidDeveloperOutput)
         call.request(prompt)
         reply = call.run()

@@ -33,6 +33,42 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     return report
 
 
+def android_verified(envelope, run) -> GateReport:
+    """Android deliverable gate: file claims get real paths (artifacts /
+    apk_path), build-metadata claims get the structured envelope fields.
+    APK checks only bind when the agent declares apk_built=true, so a
+    conversion-only run on an SDK-less machine isn't asked for an APK."""
+    report = GateReport()
+
+    if getattr(envelope, "apk_built", False):
+        apk = Path(envelope.apk_path) if envelope.apk_path else None
+        report.check("apk_path declared", bool(envelope.apk_path),
+                     "apk_built=true but apk_path empty"
+                     if not envelope.apk_path else envelope.apk_path)
+        exists = bool(apk and apk.is_file())
+        report.check("apk exists", exists,
+                     f"exists, {_size(apk)}" if exists
+                     else f"declared APK does not exist: {envelope.apk_path}")
+        nonzero = exists and apk.stat().st_size > 0
+        report.check("apk non-empty", nonzero,
+                     _size(apk) if nonzero else "APK file is empty")
+        declared_size = getattr(envelope, "apk_size_bytes", None)
+        size_agrees = (declared_size is None or not exists
+                       or declared_size == apk.stat().st_size)
+        report.check("apk_size_bytes matches file", size_agrees,
+                     f"declared {declared_size}B" if size_agrees
+                     else f"declared {declared_size}B but file is {apk.stat().st_size}B")
+        for field in ("apk_timestamp", "gradle_output", "embedded_build_hash",
+                      "verification"):
+            val = getattr(envelope, field, "")
+            report.check(field + " present", bool(val),
+                         val[:80] if val else f"{field} missing while apk_built=true")
+    report.check("www_entry present", bool(getattr(envelope, "www_entry", "")),
+                 getattr(envelope, "web_dir", "www")
+                 if getattr(envelope, "www_entry", "") else "www_entry missing")
+    return report
+
+
 # Placeholder/marker files (git + Capacitor keep-this-dir markers, empty
 # cordova shims) are legitimately empty — they're never a real deliverable,
 # so the emptiness gate must not fail on them. The Android packaging step

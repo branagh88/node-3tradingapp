@@ -723,7 +723,15 @@ class PaymentsOutput(EnvelopeBase):
     pass
 
 class AndroidDeveloperOutput(EnvelopeBase):
-    """Capacitor conversion (and APK build when the SDK is available)."""
+    """Capacitor conversion (and APK build when the SDK is available).
+
+    Contract: `artifacts` carries ONLY real filesystem paths (the APK,
+    synced web files). Build metadata lives in the dedicated fields below —
+    never inside artifacts, or the path-existence gates would stat values
+    like '1234567' as files. If an agent emits artifacts as a dict, the
+    model validator splits it: path-like entries stay, metadata keys are
+    folded into the structured fields.
+    """
 
     app_id: str = ""               # com.petrockstudios.<slug>
     app_name: str = ""
@@ -731,4 +739,40 @@ class AndroidDeveloperOutput(EnvelopeBase):
     converted: bool = False         # Capacitor platform synced
     apk_built: bool = False
     apk_path: str = ""             # android/app/build/outputs/apk/debug/app-debug.apk
+    # ── build metadata (NOT paths; verified by gates.android_verified) ──
+    gradle_output: str = ""        # evidence from ./gradlew assembleDebug
+    www_entry: str = ""            # what was copied into www/ (entry point)
+    apk_size_bytes: Optional[int] = None
+    apk_timestamp: str = ""        # mtime of the built APK
+    embedded_build_hash: str = ""  # build hash embedded in the bundle
+    verification: str = ""         # what was run to confirm the APK is good
     next_steps: str = ""           # install via adb, or build on the studio machine
+
+    @model_validator(mode="before")
+    @classmethod
+    def split_artifact_metadata(cls, data: Any) -> Any:
+        """LLMs emit artifacts as {path_or_key: note_or_value}. Keep entries
+        that look like real paths in `artifacts`; route known metadata keys to
+        the structured fields so no gate ever stats a metadata value."""
+        if not (isinstance(data, dict) and isinstance(data.get("artifacts"), dict)):
+            return data
+
+        def _is_pathish(s: str) -> bool:
+            return "/" in s or "\\" in s or (
+                "." in s and not s.replace(".", "").replace("_", "").isdigit())
+
+        paths: list[str] = []
+        for k, v in data["artifacts"].items():
+            if k in _ANDROID_METADATA_KEYS and k not in data:
+                data[k] = v                      # metadata -> structured field
+            elif isinstance(v, str) and _is_pathish(v):
+                paths.append(v)                  # {apk: '/real/path.apk'}
+            elif isinstance(k, str) and _is_pathish(k):
+                paths.append(k)                  # {'www/index.html': note}
+        data["artifacts"] = paths
+        return data
+
+
+_ANDROID_METADATA_KEYS = ("apk_size_bytes", "apk_timestamp", "embedded_build_hash",
+                          "verification", "gradle_output", "www_entry",
+                          "app_id", "app_name", "web_dir")
