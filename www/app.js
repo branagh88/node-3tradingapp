@@ -1,7 +1,8 @@
 // app.js — Main UI Controller & Router
 import { on, logger, esc, fmtPrice, fmtPct, fmtVolume, fmtTime } from './utils.js';
 import { storage } from './storage.js';
-import { loadConfig, saveConfig, isConfigured, isValidHttpUrl, API_CONFIG, DEFAULTS } from './config.js';
+import { loadConfig, saveConfig, isConfigured, hasApiKey, configStatus, isValidHttpUrl, API_CONFIG, DEFAULTS } from './config.js';
+import { getApiKey, setApiKey, clearApiKey, migrateLegacyApiKey } from './secure-store.js';
 import { TickerbotAPI } from './api.js'; 
 import { MarketData } from './market-data.js';
 import { AssetsController } from './assets.js';
@@ -28,7 +29,10 @@ let pendingConfirm = null;
 // screen. (Field bug: boot() aborted on a ReferenceError before router() ran,
 // leaving all hidden-attribute .screen sections invisible — blank main + dead
 // nav links.)
-function boot() {
+// boot() is async because the runtime-only API key loads from secure storage
+// (Capacitor Preferences / localStorage fallback) BEFORE TickerbotAPI is
+// constructed — the key must never live in the plaintext config blob.
+async function boot() {
   // Phase 1 — storage/config. Failure must not prevent UI from rendering.
   let config = null;
   try {
@@ -37,6 +41,18 @@ function boot() {
   } catch (err) {
     reportBootError('[boot] storage/config init failed', err);
     config = {};
+  }
+  // Merge the runtime key from secure storage (after migrating any legacy
+  // plaintext copy out of the localStorage config blob). On failure default
+  // to '' — the app degrades to missing-key, it never crashes or fabricates.
+  try {
+    await migrateLegacyApiKey();
+    const stored = loadConfig();
+    stored.apiKey = await getApiKey();
+    config = { ...config, ...stored };
+  } catch (err) {
+    if (config && !('apiKey' in config)) config.apiKey = '';
+    reportBootError('[boot] secure key store read failed', err);
   }
   updateGlobalStatus(config);
 
@@ -89,9 +105,11 @@ function boot() {
   guardedWire(wireConfirmModal, '[boot] wireConfirmModal');
   guardedWire(wireEvents, '[boot] wireEvents');
 
-  // Phase 4 — onboarding redirect (only when the app is unconfigured).
+  // Phase 4 — onboarding redirect (only when the app cannot poll live data:
+  // no base URL OR no API key). A URL-without-key install lands on Settings
+  // with the "API key not configured" banner instead of spamming 401s.
   try {
-    if (config && !isConfigured(config)) {
+    if (config && configStatus(config) !== 'ready') {
       const onboarding = $('#settings-onboarding');
       if (onboarding) onboarding.hidden = false;
       if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
@@ -124,7 +142,8 @@ function boot() {
   });
 
   try {
-    if (config && isConfigured(config) && marketData) marketData.start();
+    if (config && configStatus(config) === 'ready' && marketData) marketData.start();
+    else if (marketData) logger.info('[boot] live polling not started — API not ready (missing key or URL)');
   } catch (err) {
     reportBootError('[boot] market data start failed', err);
   }
@@ -212,14 +231,19 @@ function renderAssetScreen(symbol) {
 // ---------------------------------------------------------------------------
 // Settings Screen Binding & Test Connection
 // ---------------------------------------------------------------------------
-function fillSettingsForm() {
+// Populate the Settings form. The API key is NEVER rendered back into the
+// DOM — only a presence indicator ("key saved") is shown. The banner reflects
+// configStatus().
+async function fillSettingsForm() {
  const cfg = loadConfig();
+ let storedKeyPresent = false;
+ try { storedKeyPresent = hasApiKey({ ...cfg, apiKey: await getApiKey() }); } catch { storedKeyPresent = false; }
  const set = (name, value) => {
    const el = document.querySelector(`[name="${name}"]`);
    if (el) el.value = value == null ? '' : String(value);
  };
  set('baseURL', cfg.baseURL);
- set('apiKey', cfg.apiKey);
+ set('apiKey', ''); // never render the raw key into the DOM
  set('pollInterval', cfg.settings.pollInterval);
  set('apiVersion', cfg.apiVersion);
  set('stockEndpoint', cfg.stockEndpoint);
@@ -227,6 +251,26 @@ function fillSettingsForm() {
  set('wsEndpoint', cfg.wsEndpoint);
  const capSearch = document.querySelector('[name="capabilitiesSearch"]');
  if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
+ renderSettingsStatusBanner(cfg, storedKeyPresent);
+}
+
+// Status banner + saved-key indicator on the Settings screen.
+function renderSettingsStatusBanner(cfg, keyPresent) {
+ const banner = document.getElementById('settings-status-banner');
+ const savedEl = document.getElementById('api-key-saved');
+ const status = configStatus({ ...cfg, apiKey: keyPresent ? 'stored' : '' });
+ if (savedEl) {
+   savedEl.hidden = !keyPresent;
+   savedEl.textContent = keyPresent ? '•••• API key saved on this device' : '';
+ }
+ if (!banner) return;
+ banner.hidden = false;
+ banner.className = `settings-status-banner status--${status === 'ready' ? 'ok' : status}`;
+ banner.textContent = status === 'unconfigured'
+   ? 'No API base URL configured.'
+   : status === 'missing-key'
+     ? 'API key not configured — enter your Tickerbot API key to enable live data.'
+     : 'Connected — key stored on this device.';
 }
 
 async function testConnection() {
@@ -240,7 +284,9 @@ async function testConnection() {
  const requestedSymbol = (elTestSymbol && elTestSymbol.value.trim()
    ? elTestSymbol.value.trim() : 'AAPL').toUpperCase();
  const baseURL = elBase ? elBase.value.trim() : cfg.baseURL;
- const apiKey = elKey ? elKey.value.trim() : cfg.apiKey;
+ // Prefer a freshly typed key; otherwise fall back to the securely stored one.
+ let apiKey = elKey ? elKey.value.trim() : '';
+ if (!apiKey) { try { apiKey = await getApiKey(); } catch { apiKey = ''; } }
  
  if (!baseURL) {
    resultEl.hidden = false;
@@ -413,18 +459,22 @@ function updateGlobalStatus(cfg) {
   try {
     const el = document.getElementById('global-status');
     if (!el) return;
-    const configured = isConfigured(cfg);
-    el.textContent = configured ? 'CONFIGURED' : 'NOT CONFIGURED';
-    el.classList.toggle('status--ok', configured);
-    el.classList.toggle('status--unavailable', !configured);
-    el.title = configured ? 'Tickerbot API configured' : 'Global market data status';
+    const status = configStatus(cfg);
+    const label = status === 'ready' ? 'CONFIGURED'
+      : status === 'missing-key' ? 'NO API KEY' : 'NOT CONFIGURED';
+    el.textContent = label;
+    el.classList.toggle('status--ok', status === 'ready');
+    el.classList.toggle('status--unavailable', status !== 'ready');
+    el.title = status === 'ready' ? 'Tickerbot API configured'
+      : status === 'missing-key' ? 'API key not configured — enter your key in Settings'
+      : 'Global market data status';
   } catch { /* the status pill must never break boot */ }
 }
 
 function wireSettings() {
  const form = $('#settings-form');
  if (form) {
-   form.addEventListener('submit', (e) => {
+   form.addEventListener('submit', async (e) => {
      e.preventDefault();
      const cfg = loadConfig();
      const elBase = document.querySelector('[name="baseURL"]');
@@ -440,7 +490,7 @@ function wireSettings() {
      const newCfg = {
        ...cfg,
        baseURL: elBase ? elBase.value.trim() : cfg.baseURL,
-       apiKey: elKey ? elKey.value.trim() : cfg.apiKey,
+       apiKey: '', // the key NEVER enters the localStorage config blob
        apiVersion: clean(elVersion) ?? cfg.apiVersion,
        stockEndpoint: clean(elStock) ?? cfg.stockEndpoint,
        cryptoEndpoint: clean(elCrypto) ?? cfg.cryptoEndpoint,
@@ -457,12 +507,47 @@ function wireSettings() {
      saveConfig(newCfg);
      updateGlobalStatus(newCfg);
      if (api) api.setConfig(newCfg);
+     // Store/refresh the runtime key in secure storage when the user typed
+     // one; an empty field keeps the existing stored key (presence shown via
+     // the saved indicator).
+     let effectiveKey = '';
+     try {
+       if (elKey && elKey.value.trim()) await setApiKey(elKey.value.trim());
+       effectiveKey = await getApiKey();
+     } catch (err) {
+       logger.error('[settings] failed to store API key', err);
+     }
+     // Status/config reflect the runtime key even though it is never written
+     // to the persisted config blob.
+     const effCfg = { ...newCfg, apiKey: effectiveKey };
+     if (api) api.setConfig(effCfg);
+     updateGlobalStatus(effCfg);
      toast('Settings saved successfully', 'success');
-     if (isConfigured(newCfg)) {
+     renderSettingsStatusBanner(newCfg, hasApiKey(effCfg));
+     if (configStatus(effCfg) === 'ready') {
        $('#settings-onboarding').hidden = true;
        if (marketData) marketData.start();
        window.location.hash = '#/watchlist';
      }
+   });
+ }
+ // Remove API key → back to missing-key state: clear secure storage, blank
+ // the field, re-show onboarding, stop live polling.
+ const removeBtn = document.getElementById('settings-remove-key');
+ if (removeBtn) {
+   removeBtn.addEventListener('click', async () => {
+     try { await clearApiKey(); } catch (err) {
+       logger.error('[settings] failed to remove API key', err);
+     }
+     const elKey = document.querySelector('[name="apiKey"]');
+     if (elKey) elKey.value = '';
+     const cfg = loadConfig();
+     updateGlobalStatus(cfg);
+     renderSettingsStatusBanner(cfg, false);
+     const onboarding = $('#settings-onboarding');
+     if (onboarding) onboarding.hidden = false;
+     if (marketData) marketData.stop();
+     toast('API key removed from this device', 'info');
    });
  }
  const testBtn = $('#settings-test');
@@ -550,9 +635,9 @@ function wireEvents() {
 // the blank-main bug. readyState check covers that; a watchdog covers any
 // other path that leaves the app with zero visible screens.
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot);
+  document.addEventListener('DOMContentLoaded', () => { boot().catch((err) => reportBootError('[boot] failed', err)); });
 } else {
-  boot();
+  boot().catch((err) => reportBootError('[boot] failed', err));
 }
 
 // Last-resort safety net: if nothing revealed a .screen shortly after load

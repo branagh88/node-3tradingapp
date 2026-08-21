@@ -600,3 +600,14 @@ code {
   .bottomnav { display: flex; }
   .field-row { grid-template-columns: 1fr; gap: 0; }
 }
+/* Settings configuration status banner (configStatus-driven). */
+.settings-status-banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  border: 1px solid var(--border, #444);
+}
+.settings-status-banner.status--unconfigured { border-color: var(--text-dim, #888); color: var(--text-dim, #888); }
+.settings-status-banner.status--missing-key { border-color: #d08420; color: #ffc46b; background: rgba(208, 132, 32, .08); }
+.settings-status-banner.status--ok { border-color: #2e9e5b; color: #7fe0a4; background: rgba(46, 158, 91, .08); }

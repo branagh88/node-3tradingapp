@@ -51,13 +51,17 @@ const v = stored ? stored[key] : undefined;
 return typeof v === 'string' ? v : API_CONFIG[key];
 }
 
+// NOTE: loadConfig() NEVER returns a persisted apiKey. The runtime key lives
+// only in secure-store.js (Capacitor Preferences on native, dedicated
+// localStorage key on web) and is merged in by the async boot step. Any legacy
+// plaintext copy is migrated out by secure-store.migrateLegacyApiKey().
 export function loadConfig() {
 const stored = storage.get('config') || {};
 const settings = { ...DEFAULTS.settings, ...(stored.settings || {}) };
 const capabilities = { ...API_CONFIG.capabilities, ...(stored.capabilities || {}) };
 return {
   baseURL: pickString(stored, 'baseURL'),
-  apiKey: pickString(stored, 'apiKey'),
+  apiKey: '', // runtime-only — see secure-store.js
   // Optional endpoint/version overrides from Settings (round-tripped when
   // present as strings; absent keys stay undefined so API defaults apply).
   apiVersion: pickString(stored, 'apiVersion'),
@@ -85,4 +89,18 @@ try {
 
 export function isConfigured(cfg) {
 return !!cfg && isValidHttpUrl(cfg.baseURL) && cfg.baseURL.trim() !== 'YOUR_API_BASE_URL';
+}
+
+// True when a non-empty API key is present on the (boot-merged) config.
+export function hasApiKey(cfg) {
+return !!cfg && typeof cfg.apiKey === 'string' && cfg.apiKey.trim() !== '';
+}
+
+// Three-state configuration status:
+//   'unconfigured' — placeholder / no valid base URL saved yet
+//   'missing-key'  — real base URL but no API key stored on this device
+//   'ready'        — base URL + key present; live polling may start
+export function configStatus(cfg) {
+if (!isConfigured(cfg)) return 'unconfigured';
+return hasApiKey(cfg) ? 'ready' : 'missing-key';
 }

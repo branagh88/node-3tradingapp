@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { sma, ema, rsi, INDICATORS } from '../indicators.js';
 import { MarketAPI, resolveBaseURL } from '../api.js';
-import { loadConfig, saveConfig, isConfigured, API_CONFIG } from '../config.js';
+import { loadConfig, saveConfig, isConfigured, hasApiKey, configStatus, API_CONFIG } from '../config.js';
 import { storage } from '../storage.js';
 
 let failures = 0;
@@ -302,11 +302,37 @@ if (typeof localStorage === 'undefined') {
   };
 }
 storage.migrate();
-saveConfig({ baseURL: 'https://real.example.com', apiKey: 'sekret-key', settings: { pollInterval: 10 } });
+saveConfig({ baseURL: 'https://real.example.com', settings: { pollInterval: 10 } });
 const cfg = loadConfig();
-ok('config persisted + merged', cfg.baseURL === 'https://real.example.com' && cfg.settings.pollInterval === 10 && cfg.settings.freshnessMs === 60000);
+ok('config persisted + merged (apiKey never persisted)', cfg.baseURL === 'https://real.example.com' && cfg.settings.pollInterval === 10 && cfg.settings.freshnessMs === 60000);
+ok('loadConfig() never returns a persisted apiKey', cfg.apiKey === '');
 ok('isConfigured true for real URL', isConfigured(cfg));
 ok('isConfigured false for placeholder', !isConfigured(loadConfig() && { baseURL: API_CONFIG.baseURL, apiKey: API_CONFIG.apiKey }));
+
+// Key-aware configuration status (runtime key lives in secure-store.js).
+ok('hasApiKey false when empty/missing', !hasApiKey(cfg) && !hasApiKey({ ...cfg, apiKey: '' }) && !hasApiKey({ ...cfg, apiKey: '   ' }));
+ok('hasApiKey true for non-empty key', hasApiKey({ ...cfg, apiKey: 'device-stored-key' }));
+ok("configStatus 'unconfigured' for placeholder defaults", configStatus({ baseURL: API_CONFIG.baseURL, apiKey: '' }) === 'unconfigured');
+ok("configStatus 'missing-key' for URL without key", configStatus({ baseURL: 'https://real.example.com', apiKey: '' }) === 'missing-key');
+ok("configStatus 'ready' for URL + key", configStatus({ baseURL: 'https://real.example.com', apiKey: 'k' }) === 'ready');
+
+// Guard: no plausible assigned API key material in shipped sources — only
+// the '' default and YOUR_API_* placeholders may exist.
+{
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const root = join(import.meta.dirname, '..');
+  const files = ['app.js','api.js','config.js','secure-store.js','storage.js','market-data.js','index.html'];
+  const pattern = /(sk|pk|ghp|gho)_[A-Za-z0-9]{16,}|Bearer [A-Za-z0-9._-]{16,}/;
+  let leakFound = null;
+  for (const f of files) {
+    try {
+      const text = readFileSync(join(root, f), 'utf8');
+      if (pattern.test(text)) { leakFound = f; break; }
+    } catch { /* optional file */ }
+  }
+  ok('no API key material in shipped sources', !leakFound, `-> ${leakFound}`);
+}
 
 // collection CRUD + LRU bound
 const col = storage.collection('quoteCache', 3);

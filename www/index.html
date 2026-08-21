@@ -104,6 +104,8 @@
         </p>
       </div>
       <form id="settings-form" class="settings-form" novalidate>
+        <!-- Configuration status banner (driven by configStatus() in app.js). -->
+        <div id="settings-status-banner" class="settings-status-banner" hidden></div>
         <div class="card">
           <h2>API connection</h2>
           <label class="field">
@@ -114,7 +116,8 @@
           <label class="field">
             <span>API Key</span>
             <input class="input" name="apiKey" type="password" autocomplete="off" placeholder="YOUR_API_KEY_HERE" />
-            <small class="hint">Placeholder: <code>YOUR_API_KEY_HERE</code> — stored only in your browser (ma.config). Never logged.</small>
+            <small class="hint">Placeholder: <code>YOUR_API_KEY_HERE</code> — stored in device secure storage (native) or local app storage (web). Never logged, never bundled. The app never asks for or ships a key.</small>
+            <small id="api-key-saved" class="hint" hidden></small>
           </label>
           <label class="field">
             <span>API Version</span>
@@ -165,6 +168,7 @@
             <input class="input" type="text" name="testSymbol" value="AAPL" placeholder="AAPL or GME" autocomplete="off" />
           </label>
           <button id="settings-test" type="button" class="btn btn--ghost">Test connection</button>
+          <button id="settings-remove-key" type="button" class="btn btn--ghost">Remove API key</button>
           <button id="settings-save" type="submit" class="btn btn--primary">Save config</button>
         </div>
         <div id="settings-test-result" class="settings-test-result" hidden></div>
