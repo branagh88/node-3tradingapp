@@ -234,6 +234,11 @@ async function testConnection() {
  const cfg = loadConfig();
  const elBase = document.querySelector('[name="baseURL"]');
  const elKey = document.querySelector('[name="apiKey"]');
+ // TEMP-DIAGNOSTIC (revert later): the requested symbol is dynamic — read from
+ // the temporary Test Symbol input on the Settings screen (default AAPL).
+ const elTestSymbol = document.querySelector('[name="testSymbol"]');
+ const requestedSymbol = (elTestSymbol && elTestSymbol.value.trim()
+   ? elTestSymbol.value.trim() : 'AAPL').toUpperCase();
  const baseURL = elBase ? elBase.value.trim() : cfg.baseURL;
  const apiKey = elKey ? elKey.value.trim() : cfg.apiKey;
  
@@ -246,7 +251,7 @@ async function testConnection() {
 
  resultEl.hidden = false;
  resultEl.className = 'settings-test-result';
- resultEl.innerHTML = 'Testing Tickerbot API connection...<br>';
+ resultEl.innerHTML = `Testing Tickerbot API connection for ${esc(requestedSymbol)}...<br>`;
 
  // Tickerbot calls always route through our same-origin proxy (server.mjs).
  const testApi = new TickerbotAPI({
@@ -256,24 +261,61 @@ async function testConnection() {
  });
  
  try {
-   const res = await testApi.getTickerQuote('AAPL');
+   // TEMP-DIAGNOSTIC (revert later): same authenticated request path as before
+   // (GET /v2/tickers/{symbol} with the user-entered key via _doFetch), but
+   // through getTickerQuoteDiagnostic so safe stage-by-stage price traces are
+   // captured. The API key / Authorization header / raw body are NEVER shown.
+   const res = await testApi.getTickerQuoteDiagnostic(requestedSymbol);
    const debug = res._debug || {};
-   const strategy = debug.strategy || 'direct';
+   const diag = debug.diag || {};
+   const strategy = debug.strategy || diag.strategy || 'direct';
    const priorFailures = debug.strategyErrors || [];
    const fallbackNote = priorFailures.length
      ? `<div style="margin-top:6px;font-size:12px;opacity:.85;">Tried ${priorFailures.length} earlier strategy(ies) that failed: ${priorFailures.map(f => `<code>${esc(f.strategy)}</code> — ${esc(f.message)}`).join('; ')}</div>`
      : '';
    // Real HTTP status comes from the request's own _debug meta (set by
    // _doFetch) — never hard-coded.
-   const httpStatus = debug.status != null ? debug.status : 'unknown';
+   const httpStatus = debug.status != null ? debug.status : (diag.httpStatus != null ? diag.httpStatus : 'unknown');
+
+
    const hasPrice = res.price != null && Number.isFinite(Number(res.price));
+   const displayPrice = hasPrice ? Number(res.price) : null;
+   const pj = diag.parsedJson || {};
+   const ni = diag.normalizeInput || {};
+   const nq = diag.normalizedQuote || {};
+   const rr = diag.rawResponse || {};
+   const traceLine = (label, exists, type, valueHtml) =>
+     `<div style="padding:1px 0;"><strong>${esc(label)}</strong>: price exists=${esc(exists)}, type=${esc(type)}${valueHtml != null ? `, price=${esc(valueHtml)}` : ''}</div>`;
+
+   // ---- TEMP-DIAGNOSTIC panel (revert later): safe, REDACTED stage trace. ----
+   const diagPanel = `
+     <div style="margin-top:8px;font-size:12px;border-left:3px solid #888;padding-left:8px;">
+       <strong>TEMP DIAGNOSTICS</strong><br>
+       HTTP status: ${esc(httpStatus)}<br>
+       Requested symbol: ${esc(diag.requestedSymbol || requestedSymbol)}<br>
+       Returned symbol: ${esc(diag.returnedSymbol == null ? 'null' : String(diag.returnedSymbol))}<br>
+       Response JS type: ${esc(ni.jsType || 'n/a')}<br>
+       Top-level keys: ${esc(JSON.stringify(ni.topKeys || []))}<br>
+       Price field exists: ${esc(ni.priceExists || 'NO')} | typeof: ${esc(ni.priceType || 'n/a')} | value: REDACTED<br>
+       Nested metrics object exists: ${esc(ni.metricsExists || 'NO')}<br>
+       metrics.price exists: ${esc(ni.metricsPriceExists || 'NO')} | typeof: ${esc(ni.metricsPriceType || 'n/a')}<br>
+       <div style="margin-top:6px;"><strong>Stage trace (price existence/type)</strong></div>
+       ${traceLine('RAW RESPONSE', rr.priceFieldPresent || 'UNKNOWN', 'raw text', null)}
+       ${traceLine('PARSED JSON', pj.priceExists || 'NO', pj.priceType || 'n/a', null)}
+       ${traceLine('NORMALIZE INPUT', ni.priceExists || 'NO', ni.priceType || 'n/a', null)}
+       <div style="padding:1px 0;"><strong>NORMALIZED QUOTE</strong>: price=${esc(nq.price == null ? 'null' : String(nq.price))}, type=${esc(nq.priceType || 'n/a')}</div>
+       <div style="padding:1px 0;"><strong>UI MODEL</strong>: price=${esc(res.price == null ? 'null' : String(res.price))}, type=${esc(typeof res.price)}</div>
+       <div style="padding:1px 0;"><strong>DISPLAYED</strong>: ${hasPrice ? esc(String(displayPrice)) : 'UNAVAILABLE'}</div>
+     </div>`;
+
+
    // A 200 with NO usable price is NOT a successful connection test: the
    // transport worked but the payload could not be parsed into a quote, so
    // surface it as an explicit parsing error instead of 'CONNECTION SUCCESSFUL'.
    if (!hasPrice) {
      const parseMsg = debug.parsingError && debug.parsingError.message
        ? esc(debug.parsingError.message)
-       : `Tickerbot response for ${esc(res.symbol || 'AAPL')} contained no usable price field.`;
+       : `Tickerbot response for ${esc(res.symbol || requestedSymbol)} contained no usable price field.`;
      resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
        <strong>CONNECTION ERROR — PRICE UNAVAILABLE</strong><br>
@@ -281,6 +323,7 @@ async function testConnection() {
        Endpoint: <code>${esc(debug.url || '')}</code><br>
        Status: HTTP ${esc(httpStatus)} (OK) — but the response had no parsable price<br>
        ${parseMsg}
+       ${diagPanel}
      </div>${fallbackNote}
    `;
    } else {
@@ -290,7 +333,8 @@ async function testConnection() {
        Strategy/Proxy: <code>${esc(strategy)}</code><br>
        Endpoint: <code>${esc(debug.url || '')}</code><br>
        Status: HTTP ${esc(httpStatus)} OK<br>
-       Symbol: ${esc(res.symbol)} | Price: ${esc(res.price)}
+       Symbol: ${esc(res.symbol)} | Price: ${esc(displayPrice)}
+       ${diagPanel}
      </div>${fallbackNote}
    `;
    }
@@ -299,7 +343,7 @@ async function testConnection() {
    // (including any err.cause from the native HTTP plugin) so a connection
    // failure can be classified as DNS vs SSL vs CORS vs timeout.
    console.error('[testConnection] request dispatched', {
-     url: `${String(baseURL).replace(/\/+$/, '')}/v2/tickers/AAPL`,
+     url: `${String(baseURL).replace(/\/+$/, '')}/v2/tickers/${encodeURIComponent(requestedSymbol)}`,
      method: 'GET',
      headers: {
        Accept: 'application/json',
