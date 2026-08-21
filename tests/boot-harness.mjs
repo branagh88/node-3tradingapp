@@ -196,6 +196,31 @@ await new Promise((r) => setTimeout(r, 100));
 check('pill becomes CONFIGURED + status--ok after save of a real URL',
   pill && pill.textContent === 'CONFIGURED' && pill.classList.contains('status--ok') && !pill.classList.contains('status--unavailable'),
   `-> text=${pill && pill.textContent} class=${pill && pill.className}`);
+check('saved API key kept OUT of the plaintext config blob',
+  (() => { const raw = A.window.localStorage.getItem('market-intelligence:config'); return raw && !raw.includes('tb_test_dummykey'); })(),
+  '-> key material found in localStorage config');
+check('key stored in secure-store fallback namespace instead',
+  !!A.window.localStorage.getItem('market-intelligence:apikey'),
+  '-> market-intelligence:apikey missing');
+
+// ---------------------------------------------------------------------------
+// Scenario A.3 — URL saved but NO key → missing-key state: pill shows
+// NO API KEY, the settings banner shows the missing-key copy, and boot does
+// not start live polling.
+// ---------------------------------------------------------------------------
+console.log('\nboot harness [missing-key state]:');
+const E = await bootScenario('missing-key', {
+  beforeDispatch(dom) {
+    dom.window.localStorage.setItem('market-intelligence:config',
+      JSON.stringify({ baseURL: 'https://api.tickerbot.io', apiKey: '', settings: {} }));
+  },
+});
+const pillE = E.document.getElementById('global-status');
+check('boot survives with URL but no key (no uncaught exception)', !E.bootError, E.bootError ? `-> ${E.bootError.stack || E.bootError}` : '');
+check('pill shows NO API KEY when only a base URL is configured',
+  pillE && pillE.textContent === 'NO API KEY', `-> text=${pillE && pillE.textContent}`);
+const bannerE = E.document.getElementById('settings-status-banner');
+check('settings status banner present in DOM', !!bannerE);
 
 // ---------------------------------------------------------------------------
 // Scenario B — fault injection: router() throws mid-render. The hardening must

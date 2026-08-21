@@ -333,7 +333,17 @@ async _doFetch(path, options = {}) {
 
   let data;
   try {
-    data = await response.json();
+    // TEMP-DIAGNOSTIC (revert later): when the Settings Test Connection flow
+    // enables _diagCapture, keep the RAW response text (in-memory only) so the
+    // price-existence/type can be traced at each stage. Never logged, never
+    // displayed raw — only key/type probes derived from it are shown.
+    if (this._diagCapture) {
+      const rawText = await response.text();
+      this._diagLast = { rawText, status: response.status };
+      data = JSON.parse(rawText);
+    } else {
+      data = await response.json();
+    }
   } catch (err) {
     // A strategy claimed JSON but the body wasn't (captive portal / HTML
     // error page) — surface it instead of a raw SyntaxError so the Settings
@@ -399,6 +409,78 @@ async getTickerQuote(ticker) {
     console.error(`[api] getTickerQuote ${sym}: no usable price in response (keys: ${rawKeys.join(', ')})`);
   }
   return quote;
+}
+
+// TEMP-DIAGNOSTIC (revert later): same request path as getTickerQuote()
+// (GET /v2/tickers/{symbol} with the user-entered Bearer key via _doFetch)
+// but captures safe, REDACTED diagnostics for the Settings screen: HTTP
+// status, requested/returned symbols, top-level keys, price/metrics presence
+// and TYPES at every stage (raw text -> parsed JSON -> normalizeQuote input
+// -> normalized quote). Values are never included except the final normalized
+// price number. The API key / Authorization header / cookies / raw body are
+// never exposed.
+async getTickerQuoteDiagnostic(ticker) {
+  this._diagCapture = true;
+  this._diagLast = null;
+  try {
+    const sym = String(ticker || '').toUpperCase();
+    const enc = encodeURIComponent(sym);
+    const configured = this.config.stockEndpoint && String(this.config.stockEndpoint).trim();
+    const path = configured
+      ? (String(configured).includes('{ticker}')
+          ? String(configured).replace('{ticker}', enc)
+          : String(configured))
+      : `/v2/tickers/${enc}`;
+    const { data, meta } = await this._doFetch(path);
+    const quote = this.normalizeQuote(data, sym, meta);
+    const rawText = this._diagLast ? this._diagLast.rawText : null;
+    let parsed = null;
+    try { parsed = rawText != null ? JSON.parse(rawText) : null; } catch { parsed = null; }
+
+    // Safe probe: shape/keys/types ONLY — no values.
+    const probe = (obj) => {
+      const o = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : null;
+      if (!o) return { isObject: 'NO', jsType: obj === null ? 'null' : (Array.isArray(obj) ? 'array' : typeof obj), topKeys: [], priceExists: 'NO', priceType: 'n/a', metricsExists: 'NO', metricsPriceExists: 'NO', metricsPriceType: 'n/a' };
+      const hasMetrics = !!(o.metrics && typeof o.metrics === 'object');
+      return {
+        isObject: 'YES',
+        jsType: 'object',
+        topKeys: Object.keys(o),
+        priceExists: ('price' in o) ? 'YES' : 'NO',
+        priceType: typeof o.price,
+        metricsExists: hasMetrics ? 'YES' : 'NO',
+        metricsPriceExists: (hasMetrics && ('price' in o.metrics)) ? 'YES' : 'NO',
+        metricsPriceType: hasMetrics ? typeof o.metrics.price : 'n/a',
+      };
+    };
+
+    // Returned symbol: best-effort read from the parsed payload (string fields only).
+    const returnedSymbol = [parsed && parsed.symbol, parsed && parsed.ticker,
+      parsed && parsed.ticker && typeof parsed.ticker === 'object' && parsed.ticker.symbol,
+      parsed && parsed.data && typeof parsed.data === 'object' && (parsed.data.symbol || parsed.data.ticker)]
+      .find((v) => typeof v === 'string' && v) || null;
+
+    quote._debug = quote._debug || {};
+    quote._debug.diag = {
+      requestedSymbol: sym,
+      returnedSymbol,
+      httpStatus: meta.status != null ? meta.status : (this._diagLast ? this._diagLast.status : null),
+      urlPath: path,
+      rawResponse: {
+        captured: rawText != null ? 'YES' : 'NO',
+        length: rawText != null ? rawText.length : 0,
+        priceFieldPresent: rawText != null ? (/"price"\s*:/.test(rawText) ? 'YES' : 'NO') : 'UNKNOWN',
+      },
+      parsedJson: probe(parsed),
+      normalizeInput: probe(data),
+      normalizedQuote: { price: quote.price, priceType: typeof quote.price },
+      parsingError: quote._debug.parsingError || null,
+    };
+    return quote;
+  } finally {
+    this._diagCapture = false;
+    this._diagLast = null;
+  }
 }
 
 async getSignals(ticker) {

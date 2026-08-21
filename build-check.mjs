@@ -32,6 +32,7 @@ const MODULES = [
   'config.js',
   'indicators.js',
   'market-data.js',
+  'secure-store.js',
   'Marketanalysis.js',
   'notifications.js',
   'pattern-engine.js',
