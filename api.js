@@ -481,7 +481,23 @@ async getQuote(symbol, { type } = {}) {
 // never fabricate values, and type/exchange/currency fall back to defaults
 // only (see resolveType); otherwise they stay null.
 normalizeQuote(raw, ticker, meta) {
-  const item = (raw && typeof raw === 'object') ? (raw.ticker || raw.data || raw) : (raw || {});
+  // Unwrap the REAL observed payload shapes. GET /v2/tickers/{ticker} can come
+  // back as: a bare flat row ({price, previous_close, day_change, …} — the
+  // snake_case names in tickerbot-schema.json), a single-key wrapper
+  // ({ticker|data|quote|result: row}), or the same paginated ENVELOPE the
+  // directory endpoints use ({as_of, count, results|items|rows|tickers: [row]}).
+  // Arrays (envelope contents or bare [row]) collapse to their first element.
+  let item = (raw && typeof raw === 'object') ? raw : (raw || {});
+  if (Array.isArray(item)) item = item[0] || {};
+  if (item && typeof item === 'object') {
+    const wrapper = item.ticker ?? item.data ?? item.quote ?? item.result
+      ?? (Array.isArray(item.results) ? item.results[0] : undefined)
+      ?? (Array.isArray(item.items) ? item.items[0] : undefined)
+      ?? (Array.isArray(item.rows) ? item.rows[0] : undefined)
+      ?? (Array.isArray(item.tickers) ? item.tickers[0] : undefined);
+    if (wrapper && typeof wrapper === 'object') item = Array.isArray(wrapper) ? (wrapper[0] || {}) : wrapper;
+  }
+  item = item || {};
   const symbol = String(ticker || item.symbol || item.ticker || '').toUpperCase();
   // Canonical-over-alias priority. The canonical nested Tickerbot /v2/tickers
   // {ticker} row (tickerbot.io/docs/schema.json) groups quote metrics under

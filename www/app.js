@@ -263,15 +263,37 @@ async function testConnection() {
    const fallbackNote = priorFailures.length
      ? `<div style="margin-top:6px;font-size:12px;opacity:.85;">Tried ${priorFailures.length} earlier strategy(ies) that failed: ${priorFailures.map(f => `<code>${esc(f.strategy)}</code> — ${esc(f.message)}`).join('; ')}</div>`
      : '';
-   resultEl.innerHTML += `
+   // Real HTTP status comes from the request's own _debug meta (set by
+   // _doFetch) — never hard-coded.
+   const httpStatus = debug.status != null ? debug.status : 'unknown';
+   const hasPrice = res.price != null && Number.isFinite(Number(res.price));
+   // A 200 with NO usable price is NOT a successful connection test: the
+   // transport worked but the payload could not be parsed into a quote, so
+   // surface it as an explicit parsing error instead of 'CONNECTION SUCCESSFUL'.
+   if (!hasPrice) {
+     const parseMsg = debug.parsingError && debug.parsingError.message
+       ? esc(debug.parsingError.message)
+       : `Tickerbot response for ${esc(res.symbol || 'AAPL')} contained no usable price field.`;
+     resultEl.innerHTML += `
+     <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
+       <strong>CONNECTION ERROR — PRICE UNAVAILABLE</strong><br>
+       Strategy/Proxy: <code>${esc(strategy)}</code><br>
+       Endpoint: <code>${esc(debug.url || '')}</code><br>
+       Status: HTTP ${esc(httpStatus)} (OK) — but the response had no parsable price<br>
+       ${parseMsg}
+     </div>${fallbackNote}
+   `;
+   } else {
+     resultEl.innerHTML += `
      <div style="margin-top: 10px; border-left: 3px solid green; padding-left: 8px;">
        <strong>CONNECTION SUCCESSFUL</strong><br>
        Strategy/Proxy: <code>${esc(strategy)}</code><br>
        Endpoint: <code>${esc(debug.url || '')}</code><br>
-       Status: 200 OK<br>
-       Symbol: ${esc(res.symbol)} | Price: ${res.price != null && Number.isFinite(Number(res.price)) ? esc(res.price) : 'UNAVAILABLE'}
+       Status: HTTP ${esc(httpStatus)} OK<br>
+       Symbol: ${esc(res.symbol)} | Price: ${esc(res.price)}
      </div>${fallbackNote}
    `;
+   }
  } catch (err) {
    // Diagnostics: log the exact request dispatched and the full thrown error
    // (including any err.cause from the native HTTP plugin) so a connection

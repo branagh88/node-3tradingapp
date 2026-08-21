@@ -346,12 +346,33 @@ await runTestConnectionPriceCheck(
   'Price: UNAVAILABLE'
 );
 
-await runTestConnectionPriceCheck(
-  'missing-price',
-  { symbol: 'AAPL', name: 'Apple Inc.' },
-  'Price: UNAVAILABLE',
-  'Price: $0'
-);
+// A 200 response with NO parsable price is now surfaced as an explicit
+// CONNECTION ERROR (never a silent 'CONNECTION SUCCESSFUL'). The real HTTP
+// status from the request is shown instead of a hard-coded '200 OK'.
+{
+  const S = await bootScenario('missing-price-connection-error');
+  S.window.location.hash = '#/settings';
+  await new Promise((r) => setTimeout(r, 100));
+  const base = S.document.querySelector('[name="baseURL"]');
+  const key = S.document.querySelector('[name="apiKey"]');
+  if (base) base.value = 'https://api.tickerbot.io';
+  if (key) key.value = 'tb_test_dummykey';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ symbol: 'AAPL', name: 'Apple Inc.' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  let clickError = null;
+  try { S.document.querySelector('#settings-test').click(); } catch (err) { clickError = err; }
+  await new Promise((r) => setTimeout(r, 250));
+  globalThis.fetch = realFetch;
+  const res = S.document.querySelector('#settings-test-result');
+  const text = res ? res.textContent : '';
+  check('testConnection missing-price: clicked without throw', !clickError, clickError ? `-> ${clickError.stack || clickError}` : '');
+  check('testConnection missing-price: shows CONNECTION ERROR (not SUCCESSFUL)', text.includes('CONNECTION ERROR') && !text.includes('CONNECTION SUCCESSFUL'), `-> ${text.slice(0, 160)}`);
+  check('testConnection missing-price: shows REAL HTTP status 200', text.includes('HTTP 200'), `-> ${text.slice(0, 160)}`);
+  check('testConnection missing-price: never shows Price: $0', !text.includes('Price: $0'), `-> ${text.slice(0, 160)}`);
+}
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? '\nBOOT HARNESS PASS' : `\nBOOT HARNESS FAIL (${failures} failure(s))`);
