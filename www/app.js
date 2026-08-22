@@ -253,7 +253,7 @@ async function fillSettingsForm() {
  const capSearch = document.querySelector('[name="capabilitiesSearch"]');
  if (capSearch) capSearch.checked = !cfg.capabilities || cfg.capabilities.search !== false;
  const buildEl = document.getElementById('settings-build');
- if (buildEl) buildEl.textContent = `Build: ${BUILD_INFO.commit} (${BUILD_INFO.builtAt})`;
+ if (buildEl) buildEl.textContent = `Diagnostic Build: ${BUILD_INFO.commit}`;
  renderSettingsStatusBanner(cfg, storedKeyPresent);
 }
 
@@ -274,6 +274,20 @@ function renderSettingsStatusBanner(cfg, keyPresent) {
    : status === 'missing-key'
      ? 'API key not configured — enter your Tickerbot API key to enable live data.'
      : 'Connected — key stored on this device.';
+}
+
+// Defense-in-depth: strip any credential-looking query param values before
+// rendering an endpoint/URL into the diagnostic panel.
+function redactUrl(url) {
+ const SENSITIVE = /^(api_key|apikey|key|token|access_token|password)$/i;
+ try {
+  const u = new URL(String(url));
+  u.searchParams.forEach((v, k) => { if (SENSITIVE.test(k)) u.searchParams.set(k, 'REDACTED'); });
+  return u.toString();
+ } catch {
+  // Relative or malformed URL — best-effort regex redaction.
+  return String(url).replace(/([?&](?:api_key|apikey|key|token|access_token|password)=)[^&#]*/gi, '$1REDACTED');
+ }
 }
 
 async function testConnection() {
@@ -340,6 +354,7 @@ async function testConnection() {
    const diagPanel = `
      <div style="margin-top:8px;font-size:12px;border-left:3px solid #888;padding-left:8px;">
        <strong>TEMP DIAGNOSTICS</strong><br>
+       API key: ${apiKey ? 'CONFIGURED' : 'MISSING'}<br>
        HTTP status: ${esc(httpStatus)}<br>
        Requested symbol: ${esc(diag.requestedSymbol || requestedSymbol)}<br>
        Returned symbol: ${esc(diag.returnedSymbol == null ? 'null' : String(diag.returnedSymbol))}<br>
@@ -369,7 +384,7 @@ async function testConnection() {
      <div style="margin-top: 10px; border-left: 3px solid red; padding-left: 8px;">
        <strong>CONNECTION ERROR — PRICE UNAVAILABLE</strong><br>
        Strategy/Proxy: <code>${esc(strategy)}</code><br>
-       Endpoint: <code>${esc(debug.url || '')}</code><br>
+       Endpoint: <code>${esc(redactUrl(debug.url || ''))}</code><br>
        Status: HTTP ${esc(httpStatus)} (OK) — but the response had no parsable price<br>
        ${parseMsg}
        ${diagPanel}
@@ -380,7 +395,7 @@ async function testConnection() {
      <div style="margin-top: 10px; border-left: 3px solid green; padding-left: 8px;">
        <strong>CONNECTION SUCCESSFUL</strong><br>
        Strategy/Proxy: <code>${esc(strategy)}</code><br>
-       Endpoint: <code>${esc(debug.url || '')}</code><br>
+       Endpoint: <code>${esc(redactUrl(debug.url || ''))}</code><br>
        Status: HTTP ${esc(httpStatus)} OK<br>
        Symbol: ${esc(res.symbol)} | Price: ${esc(displayPrice)}
        ${diagPanel}
