@@ -262,11 +262,23 @@ async _doFetch(path, options = {}) {
         readTimeout: this.timeoutMs,
       });
       strategy = 'native';
+      // @capacitor-community/http returns the body in `data` (string when
+      // responseType is text/json-as-string, pre-parsed object otherwise).
+      // The shim must expose BOTH json() and text() — the diagnostic capture
+      // path (_diagCapture) calls response.text() and previously crashed with
+      // "response.text is not a function" on native.
+      const nativeBodyText =
+        typeof nativeRes.data === 'string' ? nativeRes.data : JSON.stringify(nativeRes.data);
       response = {
         status: nativeRes.status,
         ok: nativeRes.status >= 200 && nativeRes.status < 300,
         json: async () => (typeof nativeRes.data === 'string' ? JSON.parse(nativeRes.data) : nativeRes.data),
+        text: async () => nativeBodyText,
       };
+      // Safe diagnostics only: never log body content, keys, or Authorization.
+      console.debug(
+        `[api] native=YES status=${nativeRes.status} dataExists=${nativeRes.data != null ? 'YES' : 'NO'} dataType=${typeof nativeRes.data} text()=PRESENT`
+      );
     } else {
       // Browser fetch to our SAME-ORIGIN proxy: finalUrl is location.origin +
       // /v2/* (see buildUrl → resolveBaseURL), so this is a normal same-origin

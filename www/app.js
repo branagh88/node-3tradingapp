@@ -48,11 +48,16 @@ async function boot() {
   // to '' — the app degrades to missing-key, it never crashes or fabricates.
   try {
     await migrateLegacyApiKey();
+    let storedKey = await getApiKey();
+    // One immediate retry: a transient Preferences failure at cold start must
+    // not permanently downgrade the session to missing-key (boot-time swallow).
+    // Deliberately NOT timer-delayed so boot ordering stays synchronous-fast.
+    if (!storedKey) storedKey = await getApiKey();
     const stored = loadConfig();
-    stored.apiKey = await getApiKey();
+    stored.apiKey = typeof storedKey === 'string' ? storedKey : '';
     config = { ...config, ...stored };
   } catch (err) {
-    if (config && !('apiKey' in config)) config.apiKey = '';
+    if (!(config && typeof config.apiKey === 'string' && config.apiKey)) config.apiKey = '';
     reportBootError('[boot] secure key store read failed', err);
   }
   updateGlobalStatus(config);

@@ -55,12 +55,23 @@ export async function getApiKey() {
 
 export async function setApiKey(keyValue) {
   const value = typeof keyValue === 'string' ? keyValue.trim() : '';
-  if (!value) return clearApiKey();
+  // Overwrite guard: an empty/undefined value must NEVER delete the stored
+  // key (the destructive path is the explicit clearApiKey(), called only by
+  // the Settings remove-key button). Callers that pass '' (e.g. a blank form
+  // field or a boot-time default) are no-ops so a transient empty write can
+  // never wipe a persisted key. Logs presence only, never the value.
+  if (!value) {
+    logger.warn('[SecureStore] setApiKey ignored: empty value (no overwrite; use clearApiKey to remove)');
+    return false;
+  }
   if (isNativeRuntime()) {
     try {
       const Preferences = await preferencesPlugin();
       if (Preferences) {
         await Preferences.set({ key: PREFS_KEY, value });
+        // Mirror into the web fallback too so a later transient Preferences
+        // failure cannot make a persisted key invisible (store mismatch).
+        try { storage.set('apikey', value); } catch { /* best-effort mirror */ }
         return true;
       }
     } catch (err) {
