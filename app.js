@@ -528,21 +528,24 @@ function wireSettings() {
        }
      };
      saveConfig(newCfg);
-     updateGlobalStatus(newCfg);
-     if (api) api.setConfig(newCfg);
-     // Store/refresh the runtime key in secure storage when the user typed
-     // one; an empty field keeps the existing stored key (presence shown via
-     // the saved indicator).
+     // The live client must NEVER go keyless during a Settings save. Capture
+     // the key currently held by the runtime client before touching config,
+     // resolve the effective key FIRST (store a freshly-typed key, then read
+     // it back with boot()'s one-retry pattern for transient storage reads),
+     // and only THEN push the merged config to the client — exactly once.
+     const existingKey = (api && api.getConfig && api.getConfig().apiKey) || cfg.apiKey || '';
      let effectiveKey = '';
      try {
        if (elKey && elKey.value.trim()) await setApiKey(elKey.value.trim());
        effectiveKey = await getApiKey();
+       if (!effectiveKey) effectiveKey = await getApiKey(); // one retry, same as boot()
      } catch (err) {
        logger.error('[settings] failed to store API key', err);
      }
      // Status/config reflect the runtime key even though it is never written
      // to the persisted config blob.
-     const effCfg = { ...newCfg, apiKey: effectiveKey };
+     const effCfg = { ...newCfg, apiKey: effectiveKey || existingKey };
+     updateGlobalStatus(effCfg);
      if (api) api.setConfig(effCfg);
      updateGlobalStatus(effCfg);
      toast('Settings saved successfully', 'success');
