@@ -22,7 +22,7 @@ export class AssetsController {
     return Array.isArray(stored) ? stored : [];
   }
 
-  _saveWatchlist() { storage.set(WATCHLIST_KEY, this.watchlist); }
+  _saveWatchlist() { return storage.set(WATCHLIST_KEY, this.watchlist); }
 
   _bindMarketData() {
     bus.on('market-data:updated', results => {
@@ -148,7 +148,14 @@ export class AssetsController {
     };
 
     this.watchlist.push(normalized);
-    this._saveWatchlist();
+    if (!this._saveWatchlist()) {
+      // Quota/unavailable storage: roll back and surface to user instead of
+      // silently pretending the add succeeded.
+      this.watchlist.pop();
+      this.renderWatchlist();
+      toast(`Could not save ${symbol} — device storage is full or unavailable`, 'error');
+      return false;
+    }
     this.renderWatchlist();
     toast(`${symbol} added to watchlist`, 'success');
     bus.emit('watchlist:changed', this.getWatchlist());
