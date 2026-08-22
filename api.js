@@ -71,6 +71,24 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Unwrap the Tickerbot directory-row ENVELOPE for GET /v2/tickers/{ticker}:
+// the live endpoint returns HTTP 200 with {as_of, ticker, data:{...row}}.
+// normalizeQuote() reads quote fields from the TOP-LEVEL item, so we merge
+// `data`'s fields UP here (at the adapter boundary) — preserving the outer
+// ticker and as_of timestamp and ALL fields from data without discarding any.
+// Non-envelope payloads (flat rows, arrays, wrappers without a `data` object)
+// pass through unchanged.
+function unwrapQuoteEnvelope(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const inner = (data.data && typeof data.data === 'object' && !Array.isArray(data.data)) ? data.data : null;
+  if (!inner) return data;
+  return {
+    ...inner,
+    ticker: data.ticker ?? inner.ticker ?? inner.symbol,
+    as_of: data.as_of ?? inner.as_of,
+  };
+}
+
 // Return the RESPONSE KEYS of a raw provider object (REDACTED — names only,
 // never values). Unwraps the same {ticker|data} nesting normalizeQuote reads so
 // an audit of a no-price response shows the exact fields that were inspected.
@@ -403,7 +421,7 @@ async getTickerQuote(ticker) {
         : String(configured))
     : `/v2/tickers/${enc}`;
   const { data, meta } = await this._doFetch(path);
-  const quote = this.normalizeQuote(data, sym, meta);
+  const quote = this.normalizeQuote(unwrapQuoteEnvelope(data), sym, meta);
   // Missing-price guard: if normalization produced NO usable price (null),
   // REPORT a parsing error showing the raw response keys — never silently turn
   // a missing price into 0. This is surfaced (logged + attached to _debug) but
@@ -444,7 +462,7 @@ async getTickerQuoteDiagnostic(ticker) {
           : String(configured))
       : `/v2/tickers/${enc}`;
     const { data, meta } = await this._doFetch(path);
-    const quote = this.normalizeQuote(data, sym, meta);
+    const quote = this.normalizeQuote(unwrapQuoteEnvelope(data), sym, meta);
     const rawText = this._diagLast ? this._diagLast.rawText : null;
     let parsed = null;
     try { parsed = rawText != null ? JSON.parse(rawText) : null; } catch { parsed = null; }
