@@ -471,16 +471,24 @@ async getTickerQuoteDiagnostic(ticker) {
     const probe = (obj) => {
       const o = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : null;
       if (!o) return { isObject: 'NO', jsType: obj === null ? 'null' : (Array.isArray(obj) ? 'array' : typeof obj), topKeys: [], priceExists: 'NO', priceType: 'n/a', metricsExists: 'NO', metricsPriceExists: 'NO', metricsPriceType: 'n/a' };
-      const hasMetrics = !!(o.metrics && typeof o.metrics === 'object');
+      // TEMP-DIAGNOSTIC (revert later): envelope-aware price probe. The live
+      // GET /v2/tickers/{ticker} payload wraps the row as
+      // {as_of, ticker, data:{... price ...}} — the same shape
+      // unwrapQuoteEnvelope()/normalizeQuote() unwrap — so look one level down
+      // (data row) exactly where normalization reads, and report price/metrics
+      // existence truthfully for BOTH flat rows and envelopes. Keys/types only,
+      // never values.
+      const inner = (!('price' in o) && o.data && typeof o.data === 'object' && !Array.isArray(o.data)) ? o.data : o;
+      const hasMetrics = !!(inner.metrics && typeof inner.metrics === 'object');
       return {
         isObject: 'YES',
         jsType: 'object',
         topKeys: Object.keys(o),
-        priceExists: ('price' in o) ? 'YES' : 'NO',
-        priceType: typeof o.price,
+        priceExists: ('price' in inner) ? 'YES' : 'NO',
+        priceType: typeof inner.price,
         metricsExists: hasMetrics ? 'YES' : 'NO',
-        metricsPriceExists: (hasMetrics && ('price' in o.metrics)) ? 'YES' : 'NO',
-        metricsPriceType: hasMetrics ? typeof o.metrics.price : 'n/a',
+        metricsPriceExists: (hasMetrics && ('price' in inner.metrics)) ? 'YES' : 'NO',
+        metricsPriceType: hasMetrics ? typeof inner.metrics.price : 'n/a',
       };
     };
 
@@ -502,7 +510,7 @@ async getTickerQuoteDiagnostic(ticker) {
         priceFieldPresent: rawText != null ? (/"price"\s*:/.test(rawText) ? 'YES' : 'NO') : 'UNKNOWN',
       },
       parsedJson: probe(parsed),
-      normalizeInput: probe(data),
+      normalizeInput: probe(unwrapQuoteEnvelope(data)), // TEMP-DIAGNOSTIC: probe the ACTUAL normalizeQuote input (post-unwrap)
       normalizedQuote: { price: quote.price, priceType: typeof quote.price },
       parsingError: quote._debug.parsingError || null,
     };

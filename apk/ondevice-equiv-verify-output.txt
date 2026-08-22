@@ -1,0 +1,107 @@
+[api:temp] dispatch method=GET branch=browser url=https://api.tickerbot.io/v2/sandbox/tickers/AAPL
+[api:temp] Capacitor global=false isNativePlatform(fn)=false isNativePlatform()=false
+[api:temp] PluginHeaders count=0 HttpHeader=MISSING (Http.request falls back to bundled HttpWeb web impl -> CORS-blocked fetch)
+[api] dispatch GET https://api.tickerbot.io/v2/sandbox/tickers/AAPL {
+  headers: { Accept: 'application/json', 'Content-Type': 'application/json' }
+}
+[api] GET https://api.tickerbot.io/v2/sandbox/tickers/AAPL -> status=200 type=application/json; charset=utf-8 topKeys=["as_of","ticker","data"]
+[api:temp] dispatch method=GET branch=browser url=https://api.tickerbot.io/v2/sandbox/tickers/GME
+[api:temp] Capacitor global=false isNativePlatform(fn)=false isNativePlatform()=false
+[api:temp] PluginHeaders count=0 HttpHeader=MISSING (Http.request falls back to bundled HttpWeb web impl -> CORS-blocked fetch)
+[api] dispatch GET https://api.tickerbot.io/v2/sandbox/tickers/GME {
+  headers: { Accept: 'application/json', 'Content-Type': 'application/json' }
+}
+[api] GET https://api.tickerbot.io/v2/sandbox/tickers/GME -> status=200 type=application/json; charset=utf-8 topKeys=["as_of","ticker","data"]
+{
+  "test_connection": {
+    "AAPL": {
+      "symbol": "AAPL",
+      "httpStatus": 200,
+      "requestedSymbol": "AAPL",
+      "returnedSymbol": "AAPL",
+      "urlPath": "/v2/sandbox/tickers/AAPL",
+      "parsedJson_priceExists": "YES",
+      "parsedJson_priceType": "number",
+      "normalizeInput_priceExists": "YES",
+      "normalizeInput_priceType": "number",
+      "normalizedQuote_price": 309.61,
+      "normalizedQuote_priceType": "number",
+      "uiModel_price": 309.61,
+      "uiModel_priceType": "number",
+      "displayed": "309.61",
+      "parsingError": null,
+      "assertions": {
+        "httpStatus == 200": "PASS",
+        "parsedJson price exists == YES": "PASS",
+        "normalizeInput price exists == YES": "PASS",
+        "normalizedQuote price numeric": "PASS",
+        "UI model price numeric": "PASS",
+        "displayed numeric": "PASS"
+      }
+    },
+    "GME": {
+      "symbol": "GME",
+      "httpStatus": 200,
+      "requestedSymbol": "GME",
+      "returnedSymbol": "GME",
+      "urlPath": "/v2/sandbox/tickers/GME",
+      "parsedJson_priceExists": "YES",
+      "parsedJson_priceType": "number",
+      "normalizeInput_priceExists": "YES",
+      "normalizeInput_priceType": "number",
+      "normalizedQuote_price": 18.285,
+      "normalizedQuote_priceType": "number",
+      "uiModel_price": 18.285,
+      "uiModel_priceType": "number",
+      "displayed": "18.285",
+      "parsingError": null,
+      "assertions": {
+        "httpStatus == 200": "PASS",
+        "parsedJson price exists == YES": "PASS",
+        "normalizeInput price exists == YES": "PASS",
+        "normalizedQuote price numeric": "PASS",
+        "UI model price numeric": "PASS",
+        "displayed numeric": "PASS"
+      }
+    }
+  },
+  "search_url_preservation": {
+    "AAPL": {
+      "requested": "AAPL",
+      "finalTickerbotUrl": "https://api.tickerbot.io/v2/tickers?search=AAPL",
+      "symbolPreservedInUrl": "YES",
+      "assertion": "PASS"
+    },
+    "GME": {
+      "requested": "GME",
+      "finalTickerbotUrl": "https://api.tickerbot.io/v2/tickers?search=GME",
+      "symbolPreservedInUrl": "YES",
+      "assertion": "PASS"
+    },
+    "MSFT": {
+      "requested": "MSFT",
+      "finalTickerbotUrl": "https://api.tickerbot.io/v2/tickers?search=MSFT",
+      "symbolPreservedInUrl": "YES",
+      "assertion": "PASS"
+    },
+    "NVDA": {
+      "requested": "NVDA",
+      "finalTickerbotUrl": "https://api.tickerbot.io/v2/tickers?search=NVDA",
+      "symbolPreservedInUrl": "YES",
+      "assertion": "PASS"
+    },
+    "_live_bulk_crosscheck": {
+      "requestUrl": "https://api.tickerbot.io/v2/sandbox/tickers?tickers=AAPL,GME,MSFT,NVDA",
+      "httpStatus": 200,
+      "symbolsReturned": [
+        "AAPL",
+        "GME",
+        "MSFT",
+        "NVDA"
+      ],
+      "allRequestedSymbolsReturned": "YES",
+      "assertion": "PASS"
+    }
+  },
+  "failures": 0
+}
