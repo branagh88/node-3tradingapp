@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node build-check.mjs",
     "smoke": "node tests/smoke.mjs",
+    "test": "vitest run",
     "test:boot": "node tests/boot-harness.mjs",
     "dev": "node server.mjs",
     "serve": "node server.mjs",

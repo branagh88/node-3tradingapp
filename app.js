@@ -639,10 +639,26 @@ function wireConfirmModal() {
  const addBtn = $('#confirm-add');
  if (addBtn) {
    addBtn.addEventListener('click', async () => {
-     if (pendingConfirm && assets) {
-       await assets.addAsset(pendingConfirm);
+     // promptAdd stores the selected asset on the controller
+     // (assets._pendingAsset); pendingConfirm is a legacy fallback.
+     const asset = pendingConfirm || (assets && assets._pendingAsset);
+     if (!asset || !assets) {
        modal.close();
-       pendingConfirm = null;
+       return;
+     }
+     addBtn.disabled = true;
+     let ok = false;
+     try {
+       ok = await assets.addAsset(asset);
+     } catch (err) {
+       logger.error('Add to watchlist failed:', err);
+       toast('Unable to add asset. Please try again.', 'error');
+     }
+     addBtn.disabled = false;
+     pendingConfirm = null;
+     if (assets._pendingAsset === asset) assets._pendingAsset = null;
+     modal.close();
+     if (ok) {
        window.location.hash = '#/watchlist';
      }
    });
