@@ -7,7 +7,7 @@
 // https://api.tickerbot.io, the Bearer key comes only from Settings
 // (localStorage via config.js) and is never logged.
 import { isConfigured } from './config.js';
-import { logger } from './utils.js';
+import { logger, bus } from './utils.js';
 
 const DEFAULT_BASE_URL = 'https://api.tickerbot.io';
 const PLACEHOLDER_BASE_URL = 'YOUR_API_BASE_URL';
@@ -77,6 +77,23 @@ function toNumber(value) {
 // `data`'s fields UP here (at the adapter boundary) — preserving the outer
 // ticker and as_of timestamp and ALL fields from data without discarding any.
 // Non-envelope payloads (flat rows, arrays, wrappers without a `data` object)
+// DIAGNOSTIC-ONLY helpers for getHistoricalData — mirror the quotes
+// describeRawKeys pattern: key NAMES and shapes only, never values.
+function describeShape(data) {
+  if (data == null || typeof data !== 'object') return `[${typeof data}]`;
+  if (Array.isArray(data)) {
+    const first = data.length ? Object.keys(data[0] && typeof data[0] === 'object' ? data[0] : {}) : [];
+    return `array(${data.length}) firstKeys=${JSON.stringify(first)}`;
+  }
+  const entries = Object.entries(data).map(([k, v]) => `${k}:${Array.isArray(v) ? 'array' : typeof v}`);
+  return `keys=${JSON.stringify(entries)}`;
+}
+
+// Redact any credential-looking query params before logging a request URL.
+function redactUrl(url) {
+  return String(url).replace(/([?&])(api[_-]?key|key|token|access[_-]?token)=([^&]*)/gi, '$1$2=<redacted>');
+}
+
 // pass through unchanged.
 function unwrapQuoteEnvelope(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
@@ -533,18 +550,69 @@ async getSignals(ticker) {
 
 async getHistoricalData(ticker, range = '1D', resolution = '5m') {
   const sym = ticker.toUpperCase();
+  // Chart bars come from GET /v2/tickers/{ticker}/bars/{interval} (intervals
+  // 1s|1m|5m|15m|30m|1h|1d; params from/to epoch-ms, limit<=1000). The old
+  // /v2/series?range=&resolution= call was wrong: series ignores range and
+  // resolution entirely (it wants interval/from/to) and returns rows as an
+  // object keyed by ticker with price-only fields — never OHLCV bars.
+  const RANGE_MAP = {
+    '1D': { interval: '5m',  ms: 1 * 24 * 3600 * 1000 },
+    '5D': { interval: '15m', ms: 5 * 24 * 3600 * 1000 },
+    '1M': { interval: '1d',  ms: 30 * 24 * 3600 * 1000 },
+    '3M': { interval: '1d',  ms: 90 * 24 * 3600 * 1000 },
+    '1Y': { interval: '1d',  ms: 365 * 24 * 3600 * 1000 },
+  };
+  const spec = RANGE_MAP[String(range).toUpperCase()] || RANGE_MAP['1D'];
+  const to = Date.now();
+  const from = to - spec.ms;
+  const params = new URLSearchParams({
+    from: String(from),
+    to: String(to),
+    limit: '1000'
+  });
+  const url = `/v2/tickers/${encodeURIComponent(sym)}/bars/${spec.interval}?${params.toString()}`;
   try {
-    const { data } = await this._doFetch(`/v2/series?ticker=${encodeURIComponent(sym)}&range=${range}&resolution=${resolution}`);
-    const candles = Array.isArray(data) ? data : (data.candles || data.series || []);
-    return candles.map(c => ({
-      time: Math.floor(new Date(c.time || c.timestamp || Date.now()).getTime() / 1000),
-      open: Number(c.open || c.o || 0),
-      high: Number(c.high || c.h || 0),
-      low: Number(c.low || c.l || 0),
-      close: Number(c.close || c.c || 0),
-      volume: Number(c.volume || c.v || 0)
+    const { data } = await this._doFetch(url);
+    // Tolerant unwrap of the bars envelope: documented shape is
+    // { as_of, ticker, interval, count, next_cursor, bars:[{t,o,h,l,c,v}] }
+    // but accept {bars|data|candles:[...]} or a bare array. Field-name
+    // aliases are mapped below (t/time/timestamp -> time; o/h/l/c/v -> OHLCV).
+    let candles;
+    if (Array.isArray(data)) {
+      candles = data;
+    } else if (data && typeof data === 'object') {
+      candles = (Array.isArray(data.bars) ? data.bars : null)
+        || (Array.isArray(data.data) ? data.data : null)
+        || (Array.isArray(data.candles) ? data.candles : null) || [];
+    } else {
+      candles = [];
+    }
+    const mapped = candles.map(c => ({
+      time: Math.floor(new Date(c.time ?? c.t ?? c.timestamp ?? Date.now()).getTime() / 1000),
+      open: Number(c.open ?? c.o ?? 0),
+      high: Number(c.high ?? c.h ?? 0),
+      low: Number(c.low ?? c.l ?? 0),
+      close: Number(c.close ?? c.c ?? 0),
+      volume: Number(c.volume ?? c.v ?? 0)
     }));
-  } catch {
+    // Log raw response shape when it does NOT already match an expected
+    // candles/series/array shape, so an unexpected envelope is visible.
+    const looksExpected = Array.isArray(data)
+      || !!(data && typeof data === 'object'
+        && (Array.isArray(data.bars) || Array.isArray(data.data) || Array.isArray(data.candles)));
+    if (!looksExpected) {
+      console.warn(`[api] historical-data unexpected response shape for ${sym}: ${describeShape(data)} url=${redactUrl(this.buildUrl(url))}`);
+    }
+    return mapped;
+  } catch (err) {
+    // DIAGNOSTIC: never silently swallow into []. Report HTTP status (when we
+    // have one), the redacted request URL, and the error kind/message.
+    const status = err && err.status != null ? err.status : (err && err.statusCode) ?? 'N/A';
+    console.warn(`[api] historical-data FAILED status=${status} url=${redactUrl(this.buildUrl(url))} ` +
+      `kind=${err && err.kind || 'unknown'} message=${err && err.message}`);
+    try {
+      bus.emit('api:error', { kind: (err && err.kind) || 'historical-data', message: (err && err.message) || String(err), fatal: false });
+    } catch { /* diagnostics must never change behaviour */ }
     return [];
   }
 }
