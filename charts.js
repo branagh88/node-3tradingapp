@@ -116,12 +116,22 @@ export class ChartController {
       if (this._destroyed || !this.symbol || !this.activeTf || candleKey(this.symbol, this.activeTf) !== key) return;
       this.candles = Array.isArray(candles) ? candles : [];
       this.candleCache.put({ id: key, candles: this.candles, fetchedAt: Date.now() });
+      console.log(`HISTORY UI UPDATE symbol=${this.symbol} key=${key} bars=${this.candles.length}`);
     } catch (err) {
       if (this._destroyed || candleKey(this.symbol, this.activeTf) !== key) return;
+      console.error(`HISTORY REQUEST ERROR name=${err && err.name} message=${err && err.message} status=${(err && err.status) ?? 'N/A'}`);
       logger.warn('charts: candle fetch failed', { symbol: this.symbol, kind: err.kind });
       this.candles = [];
       bus.emit('api:error', { kind: err.kind, message: err.message, fatal: false });
+      // Visible diagnostic error in the status bar — never a silent failure.
       this._setStatus(apiErrorMessage(err), 'error');
+    } finally {
+      // ALWAYS clear the 'Loading candles…' state, success or failure.
+      if (!this._destroyed && this.activeTf && candleKey(this.symbol, this.activeTf) === key
+          && this.statusEl && !this.statusEl.hidden && /Loading candles/.test(this.statusEl.textContent || '')) {
+        this._clearStatus();
+        console.log('HISTORY LOADING CLEARED');
+      }
     }
   }
 
