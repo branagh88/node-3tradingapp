@@ -33,28 +33,17 @@ const HORIZONS = [1, 3, 5, 10];
 const { walkForwardParameterSearch, walkForwardBacktest } = await import('../../prediction-engine.js');
 const pe = await import('../../pattern-engine.js');
 const { validateBarsDataset } = await import('./validate-bars.mjs');
+// Browser-safe pooled-stats extraction: the math lives in ../../pooled-stats.js;
+// this runner re-exports so existing tests keep importing from here unchanged.
+const pooledStats = await import('../../pooled-stats.js');
 
 function pct(n, d = 2) { return n == null ? null : Number((n * 100).toFixed(d)); }
 
-/** Two-sided two-proportion z-test (normal approximation). Returns p-value. */
-export function zTestTwoProportions(k1, n1, k2, n2) {
-  if (!(n1 > 0) || !(n2 > 0)) return null;
-  const p1 = k1 / n1; const p2 = k2 / n2;
-  const p = (k1 + k2) / (n1 + n2);
-  const se = Math.sqrt(p * (1 - p) * (1 / n1 + 1 / n2));
-  if (!Number.isFinite(se) || se === 0) return null;
-  const z = (p1 - p2) / se;
-  const pValue = 2 * (1 - normalCdf(Math.abs(z)));
-  return { z: Number(z.toFixed(4)), pValue: Number(pValue.toFixed(5)) };
-}
-function normalCdf(x) { return 0.5 * (1 + erf(x / Math.SQRT2)); }
-function erf(x) {
-  const s = x < 0 ? -1 : 1; x = Math.abs(x);
-  const t = 1 / (1 + 0.3275911 * x);
-  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592)
-    * t * Math.exp(-x * x);
-  return s * y;
-}
+/** Two-sided two-proportion z-test (normal approximation). Returns p-value.
+ *  Extracted to pooled-stats.js (browser-safe); re-exported here. */
+export const zTestTwoProportions = pooledStats.zTestTwoProportions;
+export const normalCdf = pooledStats.normalCdf;
+export const erf = pooledStats.erf;
 
 /** Mechanical verdict per ticker/horizon from an "all"-slice stats object. */
 export function verdictFor(s) {

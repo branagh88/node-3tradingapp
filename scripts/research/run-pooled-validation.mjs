@@ -46,19 +46,16 @@ const peMod = await import('../../pattern-engine.js');
 const MIN_SIGNAL_SAMPLE_LIVE = peMod.DEFAULTS.MIN_SIGNAL_SAMPLE;
 const { validateBarsDataset } = await import('./validate-bars.mjs');
 const { zTestTwoProportions } = await import('./run-real-validation.mjs');
+// Browser-safe pooled-stats extraction: the math lives in ../../pooled-stats.js;
+// this runner re-exports so existing tests (tests/pooled-validation.test.mjs)
+// keep importing from here unchanged.
+const pooledStats = await import('../../pooled-stats.js');
+const { bootstrapCI } = pooledStats;
 
 function pct(n, d = 2) { return n == null ? null : Number((n * 100).toFixed(d)); }
 
-/** Wilson 95% score interval → [loFrac, hiFrac]. */
-export function wilsonInterval(correct, n) {
-  if (!(n > 0)) return [null, null];
-  const z = 1.959963984540054;
-  const p = correct / n;
-  const denom = 1 + z * z / n;
-  const center = (p + z * z / (2 * n)) / denom;
-  const half = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom;
-  return [Math.max(0, center - half), Math.min(1, center + half)];
-}
+/** Wilson 95% score interval → [loFrac, hiFrac]. (Extracted to pooled-stats.js.) */
+export const wilsonInterval = pooledStats.wilsonInterval;
 
 /**
  * Pool per-horizon stats across tickers. Each input cell is one ticker's
@@ -67,79 +64,9 @@ export function wilsonInterval(correct, n) {
  * per-ticker baseline rates (so tickers contribute proportionally to their test rows).
  * Pure function — unit-testable.
  */
+/** Extracted to pooled-stats.js; re-exported with the LIVE MIN_SIGNAL_SAMPLE threshold. */
 export function poolHorizonCells(cells) {
-  const usable = cells.filter((c) => c && Number.isFinite(c.predictions) && c.predictions >= 0);
-  const predictions = usable.reduce((a, c) => a + (c.correct != null ? c.predictions : 0), 0);
-  const correct = usable.reduce((a, c) => a + (c.correct ?? 0), 0);
-  const upSignals = usable.reduce((a, c) => a + (c.upSignals || 0), 0);
-  const downSignals = usable.reduce((a, c) => a + (c.downSignals || 0), 0);
-  const noSignals = usable.reduce((a, c) => a + (c.noSignals || 0), 0);
-  const eligibleRows = usable.reduce((a, c) => a + (c.eligibleRows || 0), 0);
-
-  // Eligibility-weighted pooled baselines.
-  function poolBaseline(key) {
-    let w = 0; let acc = 0;
-    for (const c of usable) {
-      const rate = c[key];
-      const elig = c.eligibleRows || 0;
-      if (rate == null || !(elig > 0)) continue;
-      w += elig; acc += (rate / 100) * elig;
-    }
-    return w ? pct(acc / w) : null;
-  }
-  const baselineDominantAccuracyPct = poolBaseline('baselineDominantAccuracyPct');
-  const baselineAlwaysUpAccuracyPct = poolBaseline('baselineAlwaysUpAccuracyPct');
-  const baselineMomentumAccuracyPct = poolBaseline('baselineMomentumAccuracyPct');
-
-  const signals = predictions; // every recorded prediction was a signal
-  const accuracyPct = predictions ? pct(correct / predictions) : null;
-  const [loFrac, hiFrac] = wilsonInterval(correct, predictions);
-  const bestBase = [baselineDominantAccuracyPct, baselineAlwaysUpAccuracyPct,
-    baselineMomentumAccuracyPct].filter((v) => v != null);
-  const bestBaselinePct = bestBase.length ? Math.max(...bestBase) : null;
-
-  let significance = null;
-  if (predictions > 0 && bestBaselinePct != null) {
-    const t = zTestTwoProportions(
-      correct, predictions,
-      Math.round((bestBaselinePct / 100) * predictions), predictions,
-    );
-    if (t) significance = { test: 'two-proportion-z', ...t, alpha: 0.05 };
-  }
-
-  let verdict; let verdictReason;
-  if (signals < MIN_SIGNAL_SAMPLE_LIVE) {
-    verdict = 'INSUFFICIENT EVIDENCE';
-    verdictReason = `${signals} pooled signals < ${MIN_SIGNAL_SAMPLE_LIVE} minimum`;
-  } else if (accuracyPct == null || bestBaselinePct == null) {
-    verdict = 'INSUFFICIENT EVIDENCE';
-    verdictReason = 'missing accuracy/baseline inputs';
-  } else {
-    const pOk = significance == null ? false : significance.pValue < 0.05;
-    if (accuracyPct > bestBaselinePct && pct(loFrac) > bestBaselinePct && pOk) {
-      verdict = 'EDGE';
-      verdictReason = `pooled accuracy ${accuracyPct}% > best baseline ${bestBaselinePct}%, `
-        + `Wilson-95% low ${pct(loFrac)}% > baseline, p=${significance.pValue}`;
-    } else {
-      verdict = 'NO EDGE';
-      verdictReason = `fails EDGE criteria (acc=${accuracyPct}%, bestBase=${bestBaselinePct}%, `
-        + `wilsonLow=${pct(loFrac)}%, p=${significance ? significance.pValue : 'n/a'})`;
-    }
-  }
-  return {
-    horizonsTested: cells.length,
-    tickersContributing: usable.filter((c) => (c.upSignals || 0) + (c.downSignals || 0) > 0).length,
-    eligibleRows, predictions, correct, noSignals,
-    upSignals, downSignals,
-    accuracyPct,
-    wilsonLowPct: pct(loFrac), wilsonHighPct: pct(hiFrac),
-    baselineDominantAccuracyPct, baselineAlwaysUpAccuracyPct, baselineMomentumAccuracyPct,
-    bestBaselinePct,
-    edgeVsBestBaselinePp: accuracyPct != null && bestBaselinePct != null
-      ? Number((accuracyPct - bestBaselinePct).toFixed(2)) : null,
-    significance,
-    verdict, verdictReason,
-  };
+  return pooledStats.poolHorizonCells(cells, { minSignalSample: MIN_SIGNAL_SAMPLE_LIVE });
 }
 
 /** Per-dataset metadata line required by the phase spec. */

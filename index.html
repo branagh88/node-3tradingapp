@@ -231,6 +231,43 @@
         <div id="hist-progress" class="hint" hidden></div>
         <div id="hist-error" class="error-banner" hidden></div>
         <div id="hist-results"></div>
+        <hr style="margin:16px 0;border:none;border-top:1px solid var(--border,#ddd);">
+        <h3>Run Real Validation</h3>
+        <p class="hint">Walk-forward validation over real retrieved datasets, pooled across selected tickers. Descriptive historical evaluation — NOT a forecast.</p>
+        <div class="field-row">
+          <div class="field">
+            <span>Tickers</span>
+            <div id="rv-tickers" class="chip-row" role="group" aria-label="Tickers">
+              <label><input type="checkbox" class="rv-ticker" value="AAPL">AAPL</label>
+              <label><input type="checkbox" class="rv-ticker" value="MSFT">MSFT</label>
+              <label><input type="checkbox" class="rv-ticker" value="NVDA">NVDA</label>
+              <label><input type="checkbox" class="rv-ticker" value="AMZN">AMZN</label>
+              <label><input type="checkbox" class="rv-ticker" value="META">META</label>
+              <label><input type="checkbox" class="rv-ticker" value="GOOGL">GOOGL</label>
+              <label><input type="checkbox" class="rv-ticker" value="TSLA">TSLA</label>
+              <label><input type="checkbox" class="rv-ticker" value="GME">GME</label>
+            </div>
+          </div>
+          <label class="field"><span>Dataset range</span>
+            <select id="rv-depth" class="select">
+              <option value="1y" selected>1 Year (default)</option>
+              <option value="3y">3 Years</option>
+              <option value="5y">5 Years</option>
+              <option value="max">Maximum Available</option>
+            </select>
+          </label>
+          <label class="field"><span>Use cached datasets</span>
+            <input type="checkbox" id="rv-use-cache" checked>
+          </label>
+        </div>
+        <div class="field-row">
+          <button id="rv-select-all" type="button" class="btn btn--ghost btn--sm">Select all</button>
+          <button id="rv-run" type="button" class="btn btn--primary">RUN REAL VALIDATION</button>
+        </div>
+        <div id="rv-call-warning" class="hint" hidden></div>
+        <div id="rv-progress" hidden></div>
+        <div id="rv-error" class="error-banner" hidden></div>
+        <div id="rv-results"></div>
       </section>
     </section>
   </main>

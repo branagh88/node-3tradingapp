@@ -11,6 +11,7 @@ import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
 import { HistoricalAnalysisController } from './historical-analysis.js';
+import { RealValidationController, RV_TICKERS, formatCallWarning } from './real-validation.js';
 import { analyzePattern } from './pattern-engine.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
@@ -21,6 +22,7 @@ let assets = null;
 let marketData = null;
 let chart = null;
 let histAnalysis = null;
+let realValidation = null;
 let currentRoute = '';
 let currentSymbol = null;
 let pendingConfirm = null;
@@ -120,9 +122,12 @@ async function boot() {
   // never TickerbotAPI.getHistoricalData). Failure must not break boot.
   try {
     histAnalysis = api ? new HistoricalAnalysisController({ api }) : null;
+    realValidation = api && histAnalysis
+      ? new RealValidationController({ histController: histAnalysis }) : null;
   } catch (err) {
     reportBootError('[boot] historical analysis init failed', err);
     histAnalysis = null;
+    realValidation = null;
   }
 
   // Phase 3 — event wiring. Each wire* is guarded independently so a single
@@ -133,6 +138,7 @@ async function boot() {
   guardedWire(wireConfirmModal, '[boot] wireConfirmModal');
   guardedWire(wireEvents, '[boot] wireEvents');
   guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
+  guardedWire(wireRealValidation, '[boot] wireRealValidation');
 
   // Phase 4 — onboarding redirect (only when the app cannot poll live data:
   // no base URL OR no API key). A URL-without-key install lands on Settings
@@ -274,6 +280,180 @@ function wireHistoricalAnalysis() {
  });
  const analyzeBtn = document.getElementById('hist-analyze');
  if (analyzeBtn) analyzeBtn.addEventListener('click', runHistoricalAnalysis);
+}
+
+// -------------------------------------------------------------------------
+// RUN REAL VALIDATION (Phase 6) — multi-ticker walk-forward + pooled verdicts.
+// Reuses the EXISTING TickerbotAPI/HistoricalAnalysisController (injected,
+// cached, no second client). Never renders or logs the API key.
+// -------------------------------------------------------------------------
+function wireRealValidation() {
+ const panel = document.getElementById('hist-panel');
+ if (!panel) return;
+ const runBtn = document.getElementById('rv-run');
+ if (runBtn) runBtn.addEventListener('click', showRvCallWarning);
+ const selectAll = document.getElementById('rv-select-all');
+ if (selectAll) selectAll.addEventListener('click', () => {
+   document.querySelectorAll('.rv-ticker').forEach((cb) => { cb.checked = true; });
+ });
+}
+
+function selectedRvTickers() {
+ return Array.from(document.querySelectorAll('.rv-ticker:checked'))
+   .map((cb) => cb.value.toUpperCase());
+}
+
+// State CONFIRM: pre-run API-call estimate + warning; Confirm proceeds / Cancel resets.
+function showRvCallWarning() {
+ const warnEl = document.getElementById('rv-call-warning');
+ const errorEl = document.getElementById('rv-error');
+ const resultsEl = document.getElementById('rv-results');
+ if (!warnEl) return;
+ if (errorEl) errorEl.hidden = true;
+ if (resultsEl) resultsEl.innerHTML = '';
+ const tickers = selectedRvTickers();
+ if (!tickers.length || !realValidation) {
+   warnEl.hidden = false;
+   warnEl.textContent = (!realValidation)
+     ? 'Validation unavailable: API client not initialized.'
+     : 'Select at least one ticker.';
+   return;
+ }
+ const depth = (document.getElementById('rv-depth') || {}).value || '1y';
+ const est = realValidation.estimateApiCalls(tickers, depth);
+ warnEl.hidden = false;
+ warnEl.innerHTML = `${esc(formatCallWarning({ ...est, depthId: depth }))}<br>`;
+ const confirmBtn = document.createElement('button');
+ confirmBtn.type = 'button'; confirmBtn.className = 'btn btn--primary btn--sm'; confirmBtn.textContent = 'Confirm';
+ const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'btn btn--ghost btn--sm'; cancelBtn.textContent = 'Cancel';
+ confirmBtn.addEventListener('click', () => { warnEl.hidden = true; runRealValidation(); });
+ cancelBtn.addEventListener('click', () => {
+   warnEl.hidden = true;
+   setRvProgress('', true);
+ });
+ warnEl.appendChild(confirmBtn);
+ warnEl.appendChild(document.createTextNode(' '));
+ warnEl.appendChild(cancelBtn);
+}
+
+function setRvProgress(text, hide) {
+ const el = document.getElementById('rv-progress');
+ if (!el) return;
+ el.hidden = !!hide;
+ el.textContent = text || '';
+}
+
+async function runRealValidation() {
+ const progressEl = document.getElementById('rv-progress');
+ const errorEl = document.getElementById('rv-error');
+ const resultsEl = document.getElementById('rv-results');
+ const runBtn = document.getElementById('rv-run');
+ if (!progressEl || !errorEl || !resultsEl) return;
+
+ const tickers = selectedRvTickers();
+ const depth = (document.getElementById('rv-depth') || {}).value || '1y';
+ const useCache = !(document.getElementById('rv-use-cache')) || document.getElementById('rv-use-cache').checked;
+ if (!tickers.length || !realValidation) {
+   errorEl.hidden = false;
+   errorEl.textContent = !realValidation
+     ? 'Validation failed. API client not initialized.'
+     : 'Select at least one ticker.';
+   return;
+ }
+
+ errorEl.hidden = true;
+ resultsEl.innerHTML = '';
+ progressEl.hidden = false;
+ progressEl.textContent = 'Starting validation…';
+ if (runBtn) runBtn.disabled = true;
+ try {
+   const result = await realValidation.run({
+     tickers,
+     depth,
+     useCache,
+     onProgress: ({ phase, message }) => {
+       progressEl.hidden = phase === 'DONE';
+       progressEl.textContent = message || '';
+     },
+   });
+   resultsEl.innerHTML = renderRealValidationResults(result);
+ } catch (err) {
+   errorEl.hidden = false;
+   const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
+   errorEl.innerHTML = `<strong>Real validation failed.</strong><br>`
+     + `Status: ${esc(status)}<br>`
+     + `Error type: ${esc((err && err.name) || 'Error')}<br>`
+     + `Message: ${esc(String((err && err.message) || err))}`;
+ } finally {
+   if (runBtn) runBtn.disabled = false;
+   progressEl.hidden = true;
+ }
+}
+
+function rvVerdictBadge(verdict) {
+ const cls = verdict === 'EDGE' ? 'ok' : verdict === 'NO EDGE' ? 'muted' : 'warn';
+ return `<span class="badge badge--${cls}">${esc(verdict)}</span>`;
+}
+
+function renderRealValidationResults(r) {
+ if (!r) return '';
+ let html = '<h4>Datasets</h4><table class="table"><thead><tr>'
+   + '<th>Ticker</th><th>Status</th><th>Candles</th><th>Range</th><th>API reqs</th><th>Source</th></tr></thead><tbody>';
+ for (const sym of r.included || []) {
+   const t = r.perTicker[sym] || {};
+   html += `<tr><td>${esc(sym)}</td><td>${esc(t.status || '—')}</td><td>${fmtNum(t.candles, 0)}</td>`
+     + `<td>${esc(t.dateRange || '—')}</td><td>${fmtNum(t.apiRequests, 0)}</td>`
+     + `<td>${t.fromCache ? '(cached, 0 API calls)' : 'fresh'}</td></tr>`;
+ }
+ html += '</tbody></table>';
+ if ((r.skipped || []).length) {
+   html += '<h4>Skipped</h4><table class="table"><tbody>';
+   for (const s of r.skipped) {
+     html += `<tr><td>${esc(s.ticker)}</td><td>${esc(s.reason)}</td>`
+       + `<td><button type="button" class="btn btn--sm btn--ghost" data-rv-retry="${esc(s.ticker)}">Retry</button></td></tr>`;
+   }
+   html += '</tbody></table>';
+ }
+ html += '<h4>Pooled horizons</h4><table class="table"><thead><tr>'
+   + '<th>H</th><th>Signals</th><th>Accuracy</th><th>Wilson 95% CI</th><th>Bootstrap CI</th>'
+   + '<th>Best baseline</th><th>Edge pp</th><th>p-value</th><th>Verdict</th></tr></thead><tbody>';
+ for (const h of [1, 3, 5, 10]) {
+   const p = r.pooled && r.pooled[h];
+   if (!p) continue;
+   const boot = p.bootstrapCI && p.bootstrapCI.lowPct != null
+     ? `[${fmtNum(p.bootstrapCI.lowPct)}%, ${fmtNum(p.bootstrapCI.highPct)}%]` : '—';
+   html += `<tr><td>${h}D</td><td>${fmtNum(p.predictions, 0)}</td><td>${p.accuracyPct == null ? '—' : `${fmtNum(p.accuracyPct)}%`}</td>`
+     + `<td>[${fmtNum(p.wilsonLowPct)}%, ${fmtNum(p.wilsonHighPct)}%]</td><td>${boot}</td>`
+     + `<td>${p.bestBaselinePct == null ? '—' : `${fmtNum(p.bestBaselinePct)}%`}</td>`
+     + `<td>${fmtNum(p.edgeVsBestBaselinePp)}</td>`
+     + `<td>${p.significance ? p.significance.pValue : '—'}</td>`
+     + `<td>${rvVerdictBadge(p.verdict)}${p.overlapAwareEdge ? ' <span class="hint">(overlap-aware)</span>' : ''}</td></tr>`;
+ }
+ html += '</tbody></table>';
+ html += `<p class="hint">Total API requests spent: ${fmtNum(r.totals?.apiCallsSpent, 0)} | `
+   + `Cached datasets: ${fmtNum(r.totals?.cachedDatasets, 0)}. `
+   + `${esc(r.disclaimer || 'Descriptive historical evaluation — NOT a forecast.')}</p>`;
+ // Wire per-ticker RETRY buttons (rerun just that ticker and re-pool).
+ requestAnimationFrame(() => {
+   document.querySelectorAll('[data-rv-retry]').forEach((btn) => {
+     btn.addEventListener('click', async () => {
+       btn.disabled = true;
+       try {
+         const sub = await realValidation.run({ tickers: [btn.getAttribute('data-rv-retry')], depth: r.depth, useCache: false });
+         // Merge: replace/add perTicker entry, drop from skipped, re-pool via a full rerun of included set.
+         Object.assign(r.perTicker, sub.perTicker);
+         r.skipped = (r.skipped || []).filter((s) => s.ticker !== sub.requested[0]);
+         r.included = Array.from(new Set([...(r.included || []), ...sub.included]));
+         const full = await realValidation.run({ tickers: r.included, depth: r.depth, useCache: true });
+         const el = document.getElementById('rv-results');
+         if (el) el.innerHTML = renderRealValidationResults(full);
+       } catch (err) {
+         btn.disabled = false;
+       }
+     });
+   });
+ });
+ return html;
 }
 
 async function runHistoricalAnalysis() {
