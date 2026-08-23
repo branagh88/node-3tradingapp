@@ -448,23 +448,35 @@ function renderBacktestSection(b) {
   const rows = [1, 3, 5, 10].filter((h) => b.horizons[h]).map((h) => {
     const s = b.horizons[h];
     return `<tr><td>${h}D</td>
-      <td>${s.predictions}</td>
+      <td>${s.upSignals + s.downSignals}/${s.noSignals}</td>
+      <td>${fmtNum(s.coveragePct)}%</td>
       <td>${fmtNum(s.accuracyPct)}%</td>
       <td>${fmtNum(s.positiveAccuracyPct)}% (${s.positiveSignals})</td>
       <td>${fmtNum(s.negativeAccuracyPct)}% (${s.negativeSignals})</td>
       <td>${fmtNum(s.avgReturnAfterPositivePct)}%</td>
-      <td>${fmtNum(s.baselineAccuracyPct)}%</td>
-      <td>${s.improvementOverBaselinePp == null ? '—' : `${fmtNum(s.improvementOverBaselinePp)} pp`}</td></tr>`;
+      <td>${fmtNum(s.baselineDominantAccuracyPct)}%</td>
+      <td>${fmtNum(s.baselineAlwaysUpAccuracyPct)}%</td>
+      <td>${fmtNum(s.baselineMomentumAccuracyPct)}%</td>
+      <td>${s.edgeVsBestBaselinePp == null ? '—' : `${s.edgeVsBestBaselinePp > 0 ? '+' : ''}${fmtNum(s.edgeVsBestBaselinePp)} pp`}</td></tr>`;
   }).join('');
+  const ms = b.modelScore;
+  const msHtml = ms ? `
+    <h4>MODEL QUALITY SCORE (1D)</h4>
+    <ul>
+      <li>Out-of-sample validation: <strong>${esc(ms.oosValidationStatus)}</strong> | Confidence: <strong>${esc(ms.confidence)}</strong></li>
+      <li>Observed edge vs best simple baseline: ${ms.observedEdgePp == null ? '—' : `${ms.observedEdgePp > 0 ? '+' : ''}${fmtNum(ms.observedEdgePp)} pp`} | Signals evaluated: ${ms.signalCount}</li>
+      <li>${esc(ms.note)}</li>
+    </ul>` : '';
   return `
   <section style="margin-top:12px;">
     <h3>OUT-OF-SAMPLE BACKTEST</h3>
-    <p class="hint">Out-of-Sample Result — walk-forward evaluation on the newest ${fmtNum(b.testRows, 0)} qualifying days (older data used only as the pattern database). Descriptive historical performance of the similarity method; past out-of-sample results never guarantee future behavior.</p>
+    <p class="hint">Out-of-Sample Result — walk-forward evaluation on the newest ${fmtNum(b.testRows, 0)} qualifying days (older data used only as the pattern database). Descriptive historical performance of the similarity method; past out-of-sample results never guarantee future behavior. The model may emit NO SIGNAL when the matched historical sample is too small to support a probability.</p>
     <ul>
-      <li>Split: ${fmtNum(b.databaseRows, 0)} database rows / ${fmtNum(b.testRows, 0)} test rows (ratio ${esc(String(b.splitRatio))})</li>
-      <li>Total predictions: ${b.predictionsCount} | Overall accuracy: ${fmtNum(b.accuracyPct)}%</li>
+      <li>Split: ${fmtNum(b.databaseRows, 0)} database rows / ${fmtNum(b.testRows, 0)} test rows (ratio ${esc(String(b.splitRatio))}) | Matching mode: ${esc(String(b.matchMode))}${b.medianMatchCount != null ? ` | Median matches per test day: ${b.medianMatchCount}` : ''}</li>
+      <li>Signals emitted: ${b.predictionsCount} | No-signal days: ${b.noSignalCount} | Signal coverage: ${fmtNum(b.coveragePct)}% | Overall accuracy on signals: ${fmtNum(b.accuracyPct)}%</li>
     </ul>
-    <table><thead><tr><th>Horizon</th><th>Predictions</th><th>Directional Accuracy</th><th>Positive Signal Accuracy</th><th>Negative Signal Accuracy</th><th>Avg Return After Positive Signal</th><th>Baseline (Always-Up)</th><th>Improvement</th></tr></thead><tbody>${rows}</tbody></table>
+    <table><thead><tr><th>Horizon</th><th>Signals/None</th><th>Coverage</th><th>Directional Accuracy</th><th>Positive Signal Accuracy</th><th>Negative Signal Accuracy</th><th>Avg Return After Positive</th><th>Baseline A (Dominant)</th><th>Baseline B (Always-Up)</th><th>Baseline C (Momentum)</th><th>Edge vs Best Baseline</th></tr></thead><tbody>${rows}</tbody></table>
+    ${msHtml}
   </section>`;
 }
 
