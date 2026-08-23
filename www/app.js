@@ -11,6 +11,8 @@ import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
 import { HistoricalAnalysisController } from './historical-analysis.js';
+import { analyzePattern } from './pattern-engine.js';
+import { walkForwardBacktest } from './prediction-engine.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -304,8 +306,21 @@ async function runHistoricalAnalysis() {
        progressEl.textContent = message;
      },
    });
+   // Phase 2: local pattern analysis + out-of-sample backtest (no API calls).
+   let pattern = null;
+   let backtest = null;
+   if (result.bars && result.bars.length > 60) {
+     try {
+       pattern = analyzePattern({ bars: result.bars });
+     } catch { pattern = null; }
+     try {
+       backtest = walkForwardBacktest({ bars: result.bars, horizons: [1, 3, 5, 10] });
+     } catch { backtest = null; }
+   }
    progressEl.hidden = true;
-   resultsEl.innerHTML = renderHistoricalResults(result);
+   resultsEl.innerHTML = renderHistoricalResults(result)
+     + renderPatternSection(pattern)
+     + renderBacktestSection(backtest);
  } catch (err) {
    progressEl.hidden = false;
    progressEl.textContent = '';
@@ -372,6 +387,84 @@ function renderHistoricalResults(r) {
       <li>Chronological: ${q.chronological ? 'YES' : 'NO'} | OHLC valid: ${q.ohlcValid ? 'YES' : 'NO'} | Volume available: ${q.volumeAvailable ? 'YES' : 'NO'}</li>
       <li>Date range: ${esc(q.dateRange || '—')}</li>
     </ul>
+  </section>`;
+}
+
+// Phase 2 — PATTERN ANALYSIS section (honest, conditional-historical language).
+function renderPatternSection(p) {
+  if (!p || !p.ok) {
+    const why = p ? esc(p.message || p.reason || 'unavailable') : 'not computed';
+    return `<section style="margin-top:12px;"><h3>PATTERN ANALYSIS</h3><p class="hint">Not available: ${why}</p></section>`;
+  }
+  const c = p.condition;
+  const condItems = [
+    ['RSI 14', fmtNum(c.rsi14)],
+    ['Distance from SMA20', `${fmtNum(c.distFromSma20 * 100)}%`],
+    ['Distance from EMA21', `${fmtNum(c.distFromEma21 * 100)}%`],
+    ['1D return', `${fmtNum(c.return1d * 100)}%`],
+    ['5D return', `${fmtNum(c.return5d * 100)}%`],
+    ['10D volatility', fmtNum(c.volatility10d * 100)],
+    ['Consecutive up/down days', String(c.consecutiveUpDown)],
+    ['Volume vs 20-day avg', fmtNum(c.volumeVsAvg20)],
+  ].map(([k, v]) => `<li>${k}: ${esc(v)}</li>`).join('');
+  const horizonRows = [1, 3, 5, 10].map((h) => {
+    const o = p.forwardOutcomes[h] || {};
+    return `<tr><td>${h}D</td>
+      <td>${fmtNum(o.upPct)}%</td>
+      <td>${fmtNum(o.downPct)}%</td>
+      <td>${fmtNum(o.averageReturnPct)}%</td>
+      <td>${fmtNum(o.medianReturnPct)}%</td>
+      <td>${fmtNum(o.bestReturnPct)}% / ${fmtNum(o.worstReturnPct)}%</td>
+      <td>${o.sampleSize} (${esc(o.classification)})</td></tr>`;
+  }).join('');
+  const topFeatures = p.topContributingFeatures.length
+    ? p.topContributingFeatures.map((f) => f.feature).join(', ')
+    : '—';
+  const warn = p.meetsMinMatches
+    ? ''
+    : '<div class="hint">Match count is below the minimum desired sample; treat these frequencies with extra caution.</div>';
+  return `
+  <section style="margin-top:12px;">
+    <h3>PATTERN ANALYSIS</h3>
+    <p class="hint">Historical Pattern Probability — how often similar past market conditions were followed by gains or losses. Conditional historical outcome only; NOT a prediction, forecast, or recommendation.</p>
+    <h4>Current Condition Summary</h4>
+    <ul>${condItems}</ul>
+    <ul>
+      <li>Similar past conditions: ${p.matchCount} matches within distance threshold ${esc(String(p.threshold))}</li>
+      <li>Minimum desired matches: ${p.minMatches} | Sample classification: <strong>${esc(p.sampleClassification)}</strong></li>
+      <li>Most influential matching conditions: ${esc(topFeatures)}</li>
+    </ul>
+    ${warn}
+    <table><thead><tr><th>Horizon</th><th>Up After Similar Conditions</th><th>Down %</th><th>Avg Return</th><th>Median Return</th><th>Best / Worst</th><th>Sample Size</th></tr></thead><tbody>${horizonRows}</tbody></table>
+  </section>`;
+}
+
+// Phase 2 — OUT-OF-SAMPLE BACKTEST section.
+function renderBacktestSection(b) {
+  if (!b || !b.ok) {
+    const why = b ? esc(b.message || 'unavailable') : 'not computed';
+    return `<section style="margin-top:12px;"><h3>OUT-OF-SAMPLE BACKTEST</h3><p class="hint">Not available: ${why}</p></section>`;
+  }
+  const rows = [1, 3, 5, 10].filter((h) => b.horizons[h]).map((h) => {
+    const s = b.horizons[h];
+    return `<tr><td>${h}D</td>
+      <td>${s.predictions}</td>
+      <td>${fmtNum(s.accuracyPct)}%</td>
+      <td>${fmtNum(s.positiveAccuracyPct)}% (${s.positiveSignals})</td>
+      <td>${fmtNum(s.negativeAccuracyPct)}% (${s.negativeSignals})</td>
+      <td>${fmtNum(s.avgReturnAfterPositivePct)}%</td>
+      <td>${fmtNum(s.baselineAccuracyPct)}%</td>
+      <td>${s.improvementOverBaselinePp == null ? '—' : `${fmtNum(s.improvementOverBaselinePp)} pp`}</td></tr>`;
+  }).join('');
+  return `
+  <section style="margin-top:12px;">
+    <h3>OUT-OF-SAMPLE BACKTEST</h3>
+    <p class="hint">Out-of-Sample Result — walk-forward evaluation on the newest ${fmtNum(b.testRows, 0)} qualifying days (older data used only as the pattern database). Descriptive historical performance of the similarity method; past out-of-sample results never guarantee future behavior.</p>
+    <ul>
+      <li>Split: ${fmtNum(b.databaseRows, 0)} database rows / ${fmtNum(b.testRows, 0)} test rows (ratio ${esc(String(b.splitRatio))})</li>
+      <li>Total predictions: ${b.predictionsCount} | Overall accuracy: ${fmtNum(b.accuracyPct)}%</li>
+    </ul>
+    <table><thead><tr><th>Horizon</th><th>Predictions</th><th>Directional Accuracy</th><th>Positive Signal Accuracy</th><th>Negative Signal Accuracy</th><th>Avg Return After Positive Signal</th><th>Baseline (Always-Up)</th><th>Improvement</th></tr></thead><tbody>${rows}</tbody></table>
   </section>`;
 }
 
