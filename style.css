@@ -324,6 +324,9 @@ code {
 .input--search { padding-left: 40px; }
 
 .hint { font-size: 12px; color: var(--text-faint); }
+/* Watchlist-driven validation ticker selector: empty state wraps, never
+   overflows horizontally on narrow screens (Phase 6 mobile contract). */
+.rv-tickers-empty { display: inline-block; max-width: 100%; word-break: break-word; }
 
 .settings-actions { display: flex; gap: 10px; margin-top: 6px; }
 
