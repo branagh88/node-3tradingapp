@@ -35,6 +35,8 @@ const MODULES = [
   'history-diagnostics.js',
   'history-source.js',
   'historical-analysis.js',
+  'pooled-stats.js',
+  'real-validation.js',
   'market-data.js',
   'secure-store.js',
   'Marketanalysis.js',
