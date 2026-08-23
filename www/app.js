@@ -9,6 +9,7 @@ import { MarketData } from './market-data.js';
 import { AssetsController } from './assets.js';
 import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
+import { initHistoryDiagnostics } from './history-diagnostics.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -101,6 +102,14 @@ async function boot() {
   } catch (err) {
     reportBootError('[boot] ChartController init failed', err);
     chart = null;
+  }
+
+  // TEMP-DIAGNOSTICS (revert later): floating HISTORY DIAGNOSTICS overlay —
+  // safe metadata for the historical bars request only. Independent of boot.
+  try {
+    initHistoryDiagnostics();
+  } catch (err) {
+    reportBootError('[boot] history diagnostics init failed', err);
   }
 
   // Phase 3 — event wiring. Each wire* is guarded independently so a single

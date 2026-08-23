@@ -440,7 +440,17 @@ async _doFetch(path, options = {}) {
   } catch (diagErr) {
     /* response diagnostics must never change request behaviour */
   }
-  return { data, meta: { status: response.status, url: safeUrl, strategy, strategyErrors, timestamp: Date.now() } };
+  // TEMP-DIAGNOSTIC (revert later): expose the response Content-Type on meta
+  // so getHistoricalData's diagnostics can show it WITHOUT reading the body.
+  let __contentType = null;
+  try {
+    if (response && response.headers) {
+      __contentType = typeof response.headers.get === 'function'
+        ? response.headers.get('content-type')
+        : (response.headers['content-type'] || response.headers['Content-Type'] || null);
+    }
+  } catch { /* diagnostics must never change behaviour */ }
+  return { data, meta: { status: response.status, url: safeUrl, strategy, strategyErrors, timestamp: Date.now(), contentType: __contentType } };
 }
 
 async getTickerQuote(ticker) {
@@ -592,12 +602,33 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     limit: '1000'
   });
   const url = `/v2/tickers/${encodeURIComponent(sym)}/bars/${spec.interval}?${params.toString()}`;
-  // TEMP-DIAGNOSTIC (revert later): trace the historical-data lifecycle.
-  // Never logs the API key or Authorization header (URL is redacted).
+  // TEMP-DIAGNOSTICS (revert later): safe metadata for THIS historical request
+  // only. Never contains the API key, Authorization value, request headers or
+  // any raw response body — names/counts/statuses only.
   const histStart = Date.now();
+  const histDiag = {
+    request: { ticker: sym, range: String(range).toUpperCase(), interval: spec.interval, from, to, limit: 1000 },
+    auth: 'PRESENT',
+    response: { httpStatus: null, elapsedMs: null, contentType: null, bodyTypeof: null },
+    shape: { topKeys: [], barsExists: 'NO', dataExists: 'NO', seriesExists: 'NO', candlesExists: 'NO' },
+    counts: { rawBars: 'N/A', parsed: 'N/A', normalized: 0 },
+    error: 'NONE',
+    errorDetail: null,
+  };
+  if (!this.config.apiKey) histDiag.auth = 'MISSING';
+  this.lastHistoryDiagnostics = histDiag;
+  const publishHistDiag = () => {
+    try { bus.emit('history:diagnostics', histDiag); } catch { /* never change behaviour */ }
+  };
+  // Trace the historical-data lifecycle in the console too.
+  // Never logs the API key or Authorization header (URL is redacted).
   console.log(`HISTORY REQUEST START ticker=${sym} range=${range} interval=${spec.interval} url=${redactUrl(this.buildUrl(url))}`);
   try {
     const { data, meta } = await this._doFetch(url);
+    histDiag.response.httpStatus = meta && meta.status != null ? meta.status : null;
+    histDiag.response.elapsedMs = Date.now() - histStart;
+    histDiag.response.contentType = (meta && meta.contentType) || null;
+    histDiag.response.bodyTypeof = Array.isArray(data) ? 'object (array)' : typeof data;
     console.log(`HISTORY RESPONSE RECEIVED status=${meta && meta.status != null ? meta.status : 'N/A'} elapsed_ms=${Date.now() - histStart}`);
     console.log(`HISTORY RESPONSE type=${Array.isArray(data) ? 'array' : typeof data} topKeys=${data && typeof data === 'object' && !Array.isArray(data) ? JSON.stringify(Object.keys(data)) : '[]'}`);
     // Tolerant unwrap of the bars envelope: documented shape is
@@ -607,13 +638,22 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     let candles;
     if (Array.isArray(data)) {
       candles = data;
+      histDiag.shape.topKeys = [`array(${data.length})`];
     } else if (data && typeof data === 'object') {
+      // Report the ACTUAL top-level keys — never guess the shape.
+      histDiag.shape.topKeys = Object.keys(data);
+      histDiag.shape.barsExists = Array.isArray(data.bars) ? 'YES' : 'NO';
+      histDiag.shape.dataExists = Array.isArray(data.data) ? 'YES' : 'NO';
+      histDiag.shape.candlesExists = Array.isArray(data.candles) ? 'YES' : 'NO';
       candles = (Array.isArray(data.bars) ? data.bars : null)
         || (Array.isArray(data.data) ? data.data : null)
         || (Array.isArray(data.candles) ? data.candles : null) || [];
     } else {
       candles = [];
+      histDiag.shape.topKeys = [String(typeof data)];
     }
+    histDiag.counts.rawBars = Array.isArray(candles) ? candles.length : 'N/A';
+    histDiag.counts.parsed = Array.isArray(candles) ? candles.length : 'N/A';
     console.log(`HISTORY RESPONSE barCount=${candles.length}`);
     const mapped = candles.map(c => ({
       time: Math.floor(new Date(c.time ?? c.t ?? c.timestamp ?? Date.now()).getTime() / 1000),
@@ -631,7 +671,19 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     if (!looksExpected) {
       console.warn(`[api] historical-data unexpected response shape for ${sym}: ${describeShape(data)} url=${redactUrl(this.buildUrl(url))}`);
     }
+    histDiag.counts.normalized = mapped.length;
     console.log(`HISTORY PARSE COMPLETE bars=${mapped.length}`);
+    // Classify the outcome (TEMP-DIAGNOSTICS). A 200 that yields no usable
+    // candles must be distinguishable from a transport failure.
+    if (!looksExpected) {
+      histDiag.error = 'unexpected envelope';
+      console.warn(`[api] historical-data unexpected response shape for ${sym}: ${describeShape(data)} url=${redactUrl(this.buildUrl(url))}`);
+    } else if (mapped.length === 0 && candles.length > 0) {
+      histDiag.error = 'successful-but-later-emptied';
+    } else if (candles.length === 0) {
+      histDiag.error = 'empty bars array';
+    }
+    publishHistDiag();
     return mapped;
   } catch (err) {
     console.error(`HISTORY REQUEST ERROR name=${err && err.name} message=${err && err.message} status=${(err && err.status) ?? (err && err.statusCode) ?? 'N/A'}`);
@@ -643,6 +695,22 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     try {
       bus.emit('api:error', { kind: (err && err.kind) || 'historical-data', message: (err && err.message) || String(err), fatal: false });
     } catch { /* diagnostics must never change behaviour */ }
+    // TEMP-DIAGNOSTICS: classify the failure and publish it to the UI panel.
+    histDiag.response.elapsedMs = Date.now() - histStart;
+    const msg = String((err && err.message) || '');
+    histDiag.errorDetail = { name: (err && err.name) || 'Error', message: msg.slice(0, 200) };
+    if ((err && err.kind) === 'timeout') {
+      histDiag.error = 'timeout';
+    } else if (/INVALID JSON/i.test(msg) || (err && err.name === 'SyntaxError')) {
+      histDiag.error = 'JSON parse error';
+    } else if (err && Number(err.status) > 0) {
+      histDiag.response.httpStatus = err.status;
+      histDiag.error = 'HTTP error';
+    } else {
+      // Transport-level failure with no HTTP status (network/CORS/DNS).
+      histDiag.error = 'HTTP error';
+    }
+    publishHistDiag();
     return [];
   }
 }

@@ -32,6 +32,7 @@ const MODULES = [
   'charts.js',
   'config.js',
   'indicators.js',
+  'history-diagnostics.js',
   'market-data.js',
   'secure-store.js',
   'Marketanalysis.js',
