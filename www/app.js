@@ -12,6 +12,7 @@ import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
 import { HistoricalAnalysisController } from './historical-analysis.js';
 import { RealValidationController, RV_TICKERS, formatCallWarning } from './real-validation.js';
+import { renderRealValidationResults } from './real-validation-ui.js';
 import { analyzePattern } from './pattern-engine.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
@@ -377,6 +378,7 @@ async function runRealValidation() {
      },
    });
    resultsEl.innerHTML = renderRealValidationResults(result);
+   wireRvRetryButtons(result);
  } catch (err) {
    errorEl.hidden = false;
    const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
@@ -390,49 +392,7 @@ async function runRealValidation() {
  }
 }
 
-function rvVerdictBadge(verdict) {
- const cls = verdict === 'EDGE' ? 'ok' : verdict === 'NO EDGE' ? 'muted' : 'warn';
- return `<span class="badge badge--${cls}">${esc(verdict)}</span>`;
-}
-
-function renderRealValidationResults(r) {
- if (!r) return '';
- let html = '<h4>Datasets</h4><table class="table"><thead><tr>'
-   + '<th>Ticker</th><th>Status</th><th>Candles</th><th>Range</th><th>API reqs</th><th>Source</th></tr></thead><tbody>';
- for (const sym of r.included || []) {
-   const t = r.perTicker[sym] || {};
-   html += `<tr><td>${esc(sym)}</td><td>${esc(t.status || '—')}</td><td>${fmtNum(t.candles, 0)}</td>`
-     + `<td>${esc(t.dateRange || '—')}</td><td>${fmtNum(t.apiRequests, 0)}</td>`
-     + `<td>${t.fromCache ? '(cached, 0 API calls)' : 'fresh'}</td></tr>`;
- }
- html += '</tbody></table>';
- if ((r.skipped || []).length) {
-   html += '<h4>Skipped</h4><table class="table"><tbody>';
-   for (const s of r.skipped) {
-     html += `<tr><td>${esc(s.ticker)}</td><td>${esc(s.reason)}</td>`
-       + `<td><button type="button" class="btn btn--sm btn--ghost" data-rv-retry="${esc(s.ticker)}">Retry</button></td></tr>`;
-   }
-   html += '</tbody></table>';
- }
- html += '<h4>Pooled horizons</h4><table class="table"><thead><tr>'
-   + '<th>H</th><th>Signals</th><th>Accuracy</th><th>Wilson 95% CI</th><th>Bootstrap CI</th>'
-   + '<th>Best baseline</th><th>Edge pp</th><th>p-value</th><th>Verdict</th></tr></thead><tbody>';
- for (const h of [1, 3, 5, 10]) {
-   const p = r.pooled && r.pooled[h];
-   if (!p) continue;
-   const boot = p.bootstrapCI && p.bootstrapCI.lowPct != null
-     ? `[${fmtNum(p.bootstrapCI.lowPct)}%, ${fmtNum(p.bootstrapCI.highPct)}%]` : '—';
-   html += `<tr><td>${h}D</td><td>${fmtNum(p.predictions, 0)}</td><td>${p.accuracyPct == null ? '—' : `${fmtNum(p.accuracyPct)}%`}</td>`
-     + `<td>[${fmtNum(p.wilsonLowPct)}%, ${fmtNum(p.wilsonHighPct)}%]</td><td>${boot}</td>`
-     + `<td>${p.bestBaselinePct == null ? '—' : `${fmtNum(p.bestBaselinePct)}%`}</td>`
-     + `<td>${fmtNum(p.edgeVsBestBaselinePp)}</td>`
-     + `<td>${p.significance ? p.significance.pValue : '—'}</td>`
-     + `<td>${rvVerdictBadge(p.verdict)}${p.overlapAwareEdge ? ' <span class="hint">(overlap-aware)</span>' : ''}</td></tr>`;
- }
- html += '</tbody></table>';
- html += `<p class="hint">Total API requests spent: ${fmtNum(r.totals?.apiCallsSpent, 0)} | `
-   + `Cached datasets: ${fmtNum(r.totals?.cachedDatasets, 0)}. `
-   + `${esc(r.disclaimer || 'Descriptive historical evaluation — NOT a forecast.')}</p>`;
+function wireRvRetryButtons(r) {
  // Wire per-ticker RETRY buttons (rerun just that ticker and re-pool).
  requestAnimationFrame(() => {
    document.querySelectorAll('[data-rv-retry]').forEach((btn) => {
@@ -446,14 +406,16 @@ function renderRealValidationResults(r) {
          r.included = Array.from(new Set([...(r.included || []), ...sub.included]));
          const full = await realValidation.run({ tickers: r.included, depth: r.depth, useCache: true });
          const el = document.getElementById('rv-results');
-         if (el) el.innerHTML = renderRealValidationResults(full);
+         if (el) {
+           el.innerHTML = renderRealValidationResults(full);
+           wireRvRetryButtons(full);
+         }
        } catch (err) {
          btn.disabled = false;
        }
      });
    });
  });
- return html;
 }
 
 async function runHistoricalAnalysis() {
