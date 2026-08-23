@@ -17,6 +17,7 @@ import {
   HISTORY_ANALYSIS_LIMITS,
 } from '../historical-analysis.js';
 import { RateLimiter } from '../history-source.js';
+import { RateLimitError } from '../api.js';
 
 const DAY = 24 * 3600 * 1000;
 
@@ -58,13 +59,20 @@ function envelope(bars, nextCursor) {
   return { status: 200, data: { as_of: 'x', count: bars.length, next_cursor: nextCursor, bars } };
 }
 
+function fakeClock() {
+  const clock = { t: 1_000_000 };
+  return {
+    now: () => clock.t,
+    sleep: async (ms) => { clock.t += Math.max(1, ms); },
+  };
+}
+
 function fastController(api) {
   return new HistoricalAnalysisController({
     api,
-    rateLimiter: new RateLimiter({
-      now: () => 0,
-      sleep: async () => {},
-    }),
+    rateLimiter: new RateLimiter(fakeClock()),
+    // Instant rate-limit retry in tests — never real multi-second sleeps.
+    historyLimits: { RATE_LIMIT_RETRY_MS: 1 },
   });
 }
 
@@ -163,8 +171,9 @@ describe('computeDataQuality', () => {
     // 10 consecutive weekdays then skip a whole week.
     const partA = dailyBars(10);
     const last = partA[partA.length - 1];
-    const partB = dailyBars(5).map((b) => ({ ...b, t: last.t + 8 * DAY }));
-    const bars = [...partA, ...partB];
+    const baseB = dailyBars(5);
+    const shift = last.t + 8 * DAY - baseB[0].t; // resume a full week later
+    const bars = [...partA, ...baseB.map((b) => ({ ...b, t: b.t + shift }))];
     const q = computeDataQuality({ bars, rawCount: 15 });
     expect(q.missingTradingDays).toBeGreaterThanOrEqual(5);
   });
@@ -245,7 +254,7 @@ describe('HistoricalAnalysisController.run', () => {
     // Each page is short but keeps yielding a fresh cursor — never exhausts.
     let gen = 0;
     const api = stubApi([
-      (call) => envelope(dailyBars(10).map((b) => ({ ...b, t: b.t - (call) * 300 * DAY })), `CUR-${gen++}`),
+      (call) => envelope(dailyBars(10).map((b) => ({ ...b, t: b.t - call * 30 * DAY })), `CUR-${gen++}`),
     ]);
     const ctl = fastController(api);
     const res = await ctl.run({ ticker: 'AAPL', depth: '1y' });
@@ -257,7 +266,7 @@ describe('HistoricalAnalysisController.run', () => {
   it('survives cursor exhaustion on a short final page (server_exhausted)', async () => {
     const api = stubApi([
       envelope(dailyBars(500), 'CUR-1'),
-      envelope(dailyBars(10), null),
+      envelope(dailyBars(10).map((b) => ({ ...b, t: b.t - 600 * DAY })), null),
     ]);
     const ctl = fastController(api);
     const res = await ctl.run({ ticker: 'AAPL', depth: '1y' });
@@ -279,7 +288,7 @@ describe('HistoricalAnalysisController.run', () => {
   });
 
   it('stops gracefully on repeated 429 rate limiting', async () => {
-    const err = Object.assign(new Error('RATE LIMITED (429)'), { status: 429, name: 'RateLimitError' });
+    const err = new RateLimitError('RATE LIMITED (429)', 429);
     const api = stubApi([err]);
     const ctl = fastController(api);
     const res = await ctl.run({ ticker: 'AAPL', depth: '1y' });

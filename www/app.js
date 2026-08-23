@@ -10,6 +10,7 @@ import { AssetsController } from './assets.js';
 import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
+import { HistoricalAnalysisController } from './historical-analysis.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -17,6 +18,7 @@ let api = null;
 let assets = null;
 let marketData = null;
 let chart = null;
+let histAnalysis = null;
 let currentRoute = '';
 let currentSymbol = null;
 let pendingConfirm = null;
@@ -112,6 +114,15 @@ async function boot() {
     reportBootError('[boot] history diagnostics init failed', err);
   }
 
+  // Historical Analysis controller (uses ONLY HistorySource pagination —
+  // never TickerbotAPI.getHistoricalData). Failure must not break boot.
+  try {
+    histAnalysis = api ? new HistoricalAnalysisController({ api }) : null;
+  } catch (err) {
+    reportBootError('[boot] historical analysis init failed', err);
+    histAnalysis = null;
+  }
+
   // Phase 3 — event wiring. Each wire* is guarded independently so a single
   // binding failure cannot abort the rest of boot (or the router below).
   guardedWire(wireSearch, '[boot] wireSearch');
@@ -119,6 +130,7 @@ async function boot() {
   guardedWire(wireWatchlistControls, '[boot] wireWatchlistControls');
   guardedWire(wireConfirmModal, '[boot] wireConfirmModal');
   guardedWire(wireEvents, '[boot] wireEvents');
+  guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
 
   // Phase 4 — onboarding redirect (only when the app cannot poll live data:
   // no base URL OR no API key). A URL-without-key install lands on Settings
@@ -241,6 +253,126 @@ function renderAssetScreen(symbol) {
  $('#asset-name').textContent = entry ? entry.name : symbol.toUpperCase();
  $('#asset-ticker').textContent = symbol.toUpperCase();
  if (chart) chart.renderAsset(symbol);
+ // Reset the Historical Analysis panel state for this asset.
+ const ht = document.getElementById('hist-ticker');
+ if (ht) ht.textContent = symbol.toUpperCase();
+}
+
+// ---------------------------------------------------------------------------
+// Historical Analysis (asset detail view)
+// ---------------------------------------------------------------------------
+function wireHistoricalAnalysis() {
+ const openBtn = document.getElementById('hist-analysis-btn');
+ const panel = document.getElementById('hist-panel');
+ if (!openBtn || !panel) return;
+ openBtn.addEventListener('click', () => {
+   panel.hidden = !panel.hidden;
+   const ht = document.getElementById('hist-ticker');
+   if (ht && currentSymbol) ht.textContent = currentSymbol.toUpperCase();
+ });
+ const analyzeBtn = document.getElementById('hist-analyze');
+ if (analyzeBtn) analyzeBtn.addEventListener('click', runHistoricalAnalysis);
+}
+
+async function runHistoricalAnalysis() {
+ const progressEl = document.getElementById('hist-progress');
+ const errorEl = document.getElementById('hist-error');
+ const resultsEl = document.getElementById('hist-results');
+ const analyzeBtn = document.getElementById('hist-analyze');
+ if (!progressEl || !errorEl || !resultsEl) return;
+
+ const symbol = currentSymbol;
+ const depth = (document.getElementById('hist-depth') || {}).value || '1y';
+ if (!symbol || !histAnalysis) {
+   errorEl.hidden = false;
+   errorEl.textContent = !symbol
+     ? 'No asset selected.'
+     : 'Historical analysis failed. API client not initialized.';
+   return;
+ }
+
+ errorEl.hidden = true;
+ resultsEl.innerHTML = '';
+ progressEl.hidden = false;
+ progressEl.textContent = 'Retrieving historical data... Page 1';
+ if (analyzeBtn) analyzeBtn.disabled = true;
+ try {
+   const result = await histAnalysis.run({
+     ticker: symbol,
+     depth,
+     onProgress: ({ message }) => {
+       progressEl.textContent = message;
+     },
+   });
+   progressEl.hidden = true;
+   resultsEl.innerHTML = renderHistoricalResults(result);
+ } catch (err) {
+   progressEl.hidden = false;
+   progressEl.textContent = '';
+   errorEl.hidden = false;
+   const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
+   errorEl.innerHTML = `<strong>Historical analysis failed.</strong><br>`
+     + `Status: ${esc(status)}<br>`
+     + `Error type: ${esc((err && err.name) || 'Error')}<br>`
+     + `Message: ${esc(String((err && err.message) || err))}`;
+ } finally {
+   if (analyzeBtn) analyzeBtn.disabled = false;
+ }
+}
+
+function fmtNum(v, digits = 2) {
+ return v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toLocaleString(undefined,
+   { maximumFractionDigits: digits });
+}
+
+function renderHistoricalResults(r) {
+ const partialBadge = r.status === 'PARTIAL'
+   ? '<span class="badge badge--unavailable">PARTIAL DATASET</span>'
+   : '<span class="badge badge--ok">COMPLETE</span>';
+ const stoppedLine = r.stoppedReason && r.status === 'PARTIAL'
+   ? `<div class="hint">Stopped early: ${esc(r.stoppedReason)}. No gaps were filled.</div>` : '';
+ const s = r.statistics;
+ const q = r.quality;
+ const fo = r.forwardOutcomes || {};
+ const outcomeRows = [1, 3, 5, 10].map((h) => {
+   const o = fo[h] || {};
+   return `<tr><td>${h}D</td><td>${fmtNum(o.positivePct)}%</td><td>${fmtNum(o.negativePct)}%</td><td>${fmtNum(o.averageReturnPct)}%</td></tr>`;
+ }).join('');
+ return `
+  <section style="margin-top:12px;">
+    <h3>DATASET ${partialBadge}</h3>
+    <ul>
+      <li>Status: ${esc(r.status)}</li>
+      <li>Candles: ${fmtNum(r.bars.length, 0)} | Pages: ${r.pagesFetched} | API requests: ${r.apiRequests}</li>
+      <li>Oldest: ${esc(q.oldestDate || '—')} | Newest: ${esc(q.newestDate || '—')}</li>
+      <li>Interval: 1D</li>
+      <li>Duplicates removed: ${fmtNum(r.duplicatesRemoved, 0)}</li>
+      <li>Data coverage: ${fmtNum(r.coverageYears)} years</li>
+    </ul>
+    ${stoppedLine}
+    <h3>STATISTICS</h3>
+    <p class="hint">Historical descriptive statistics only — not a prediction or forecast.</p>
+    <ul>
+      <li>Total candles: ${fmtNum(s.totalCandles, 0)} (${fmtNum(s.tradingDays, 0)} trading days)</li>
+      <li>First close: ${fmtNum(s.firstClose)} | Latest close: ${fmtNum(s.latestClose)}</li>
+      <li>Highest close: ${fmtNum(s.highestClose)} | Lowest close: ${fmtNum(s.lowestClose)} | Average close: ${fmtNum(s.averageClose)}</li>
+      <li>Average daily return: ${fmtNum(s.averageDailyReturnPct)}%</li>
+      <li>Positive days: ${fmtNum(s.positiveDays, 0)} (${fmtNum(s.positiveDaysPct)}%) | Negative days: ${fmtNum(s.negativeDays, 0)} (${fmtNum(s.negativeDaysPct)}%) | Flat days: ${fmtNum(s.flatDays, 0)} (${fmtNum(s.flatDaysPct)}%)</li>
+      <li>Largest gain: ${fmtNum(s.largestGainPct)}% | Largest loss: ${fmtNum(s.largestLossPct)}%</li>
+      <li>Volume — avg: ${fmtVolume(s.avgVolume)} | max: ${fmtVolume(s.maxVolume)} | min: ${fmtVolume(s.minVolume)}</li>
+    </ul>
+    <h3>FORWARD OUTCOMES</h3>
+    <p class="hint">Empirical historical frequencies only — “Historical Positive Outcome Rate” is NOT a forecast.</p>
+    <table><thead><tr><th>Horizon</th><th>Historical Positive Outcome Rate</th><th>Negative %</th><th>Average Return</th></tr></thead><tbody>${outcomeRows}</tbody></table>
+    <h3>DATA QUALITY</h3>
+    <ul>
+      <li>Candles: ${fmtNum(q.candles, 0)}</li>
+      <li>Duplicates removed: ${fmtNum(q.duplicatesRemoved, 0)}</li>
+      <li>Missing trading days (reported, never filled): ${q.missingTradingDays == null ? '—' : fmtNum(q.missingTradingDays, 0)}</li>
+      <li>Chronological: ${q.chronological ? 'YES' : 'NO'} | OHLC valid: ${q.ohlcValid ? 'YES' : 'NO'} | Volume available: ${q.volumeAvailable ? 'YES' : 'NO'}</li>
+      <li>Date range: ${esc(q.dateRange || '—')}</li>
+    </ul>
+  </section>`;
 }
 
 // ---------------------------------------------------------------------------

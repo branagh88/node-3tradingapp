@@ -208,6 +208,30 @@
         <p class="empty-sub">This app renders only candles returned by your API. If history is empty, check the asset/timeframe and your API configuration.</p>
       </div>
       <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+
+      <!-- HISTORICAL ANALYSIS panel -->
+      <div class="asset-actions" style="margin-top:12px;">
+        <button id="hist-analysis-btn" type="button" class="btn btn--ghost">Historical Analysis</button>
+      </div>
+      <section id="hist-panel" class="card" style="margin-top:12px;" hidden>
+        <h2>Historical Analysis</h2>
+        <p>Ticker: <strong id="hist-ticker">—</strong></p>
+        <div class="field-row">
+          <label class="field">
+            <span>Depth</span>
+            <select id="hist-depth" class="select">
+              <option value="1y" selected>1 Year (default)</option>
+              <option value="3y">3 Years</option>
+              <option value="5y">5 Years</option>
+              <option value="max">Maximum Available</option>
+            </select>
+          </label>
+          <button id="hist-analyze" type="button" class="btn btn--primary">ANALYZE HISTORICAL DATA</button>
+        </div>
+        <div id="hist-progress" class="hint" hidden></div>
+        <div id="hist-error" class="error-banner" hidden></div>
+        <div id="hist-results"></div>
+      </section>
     </section>
   </main>
 
