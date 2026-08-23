@@ -624,7 +624,14 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
   // Never logs the API key or Authorization header (URL is redacted).
   console.log(`HISTORY REQUEST START ticker=${sym} range=${range} interval=${spec.interval} url=${redactUrl(this.buildUrl(url))}`);
   try {
-    const { data, meta } = await this._doFetch(url);
+    // Single-page bars request extracted into _fetchBarsPage so the history
+    // retrieval layer (history-source.js) can reuse the same transport path.
+    // Identical request URL, response handling and error propagation.
+    const { data, meta } = await this._fetchBarsPage(sym, spec.interval, {
+      from: String(from),
+      to: String(to),
+      limit: '1000',
+    });
     histDiag.response.httpStatus = meta && meta.status != null ? meta.status : null;
     histDiag.response.elapsedMs = Date.now() - histStart;
     histDiag.response.contentType = (meta && meta.contentType) || null;
@@ -713,6 +720,31 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     publishHistDiag();
     return [];
   }
+}
+
+// Single-page bars request against GET /v2/tickers/{ticker}/bars/{interval}.
+// `params` values are appended as query params (undefined/null skipped).
+// Returns { data, meta, url }; transport errors propagate to the caller.
+// Never references or logs the API key — any URL logging stays behind redactUrl().
+async _fetchBarsPage(ticker, interval, params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    qs.set(k, String(v));
+  }
+  const url = `/v2/tickers/${encodeURIComponent(String(ticker).toUpperCase())}/bars/${interval}${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const { data, meta } = await this._doFetch(url);
+  return { data, meta, url };
+}
+
+// Raw paginated-bars adapter for HistorySource (history-source.js): forwards
+// cursor/before pagination params when defined and lets errors propagate so
+// the source can apply its own rate-limit/retry safeguards.
+async fetchBarsPageRaw({ ticker, interval, from, to, before, cursor, limit } = {}) {
+  return this._fetchBarsPage(ticker, interval, {
+    from, to, before, cursor,
+    limit: limit != null ? String(limit) : undefined,
+  });
 }
 
 async runScan(criteria = {}) {
