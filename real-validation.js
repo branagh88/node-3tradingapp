@@ -15,7 +15,9 @@ import { poolHorizonCells, wilsonInterval, bootstrapCI } from './pooled-stats.js
 import { DEFAULTS as PATTERN_DEFAULTS } from './pattern-engine.js';
 import { walkForwardParameterSearch } from './prediction-engine.js';
 
-export const RV_TICKERS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'GME'];
+// NOTE: the validation ticker universe is NOT hardcoded here anymore.
+// It comes from the live Watchlist (assets.getWatchlist(), localStorage via
+// storage.js); see rv-ticker-selector.js + index.html #rv-tickers.
 export const RV_HORIZONS = [1, 3, 5, 10];
 
 const TRADING_DAYS_PER_YEAR = 252;

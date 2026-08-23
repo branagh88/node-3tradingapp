@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 import { genBars } from '../scripts/research/gen-bars.mjs';
 import {
   RealValidationController,
-  RV_TICKERS,
   RV_HORIZONS,
   estimateApiCallsForDepth,
   formatCallWarning,
@@ -73,9 +72,9 @@ const cell = (predictions, correct, baseline, eligibleRows = 100) => ({
 });
 
 describe('RV constants', () => {
-  it('exposes the exact 8-ticker universe and horizons', () => {
-    expect(RV_TICKERS).toEqual(['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'GME']);
+  it('exposes horizons and NO hardcoded ticker universe (watchlist-driven)', async () => {
     expect(RV_HORIZONS).toEqual([1, 3, 5, 10]);
+    expect('RV_TICKERS' in await import('../real-validation.js')).toBe(false);
   });
 });
 

@@ -11,7 +11,8 @@ import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
 import { HistoricalAnalysisController } from './historical-analysis.js';
-import { RealValidationController, RV_TICKERS, formatCallWarning } from './real-validation.js';
+import { RealValidationController, formatCallWarning } from './real-validation.js';
+import { renderRvTickerSelector } from './rv-ticker-selector.js';
 import { renderRealValidationResults } from './real-validation-ui.js';
 import { analyzePattern } from './pattern-engine.js';
 import { walkForwardBacktest } from './prediction-engine.js';
@@ -275,6 +276,7 @@ function wireHistoricalAnalysis() {
  const panel = document.getElementById('hist-panel');
  if (!openBtn || !panel) return;
  openBtn.addEventListener('click', () => {
+   if (panel.hidden) renderRvTickerOptions(); // refresh from live Watchlist on open
    panel.hidden = !panel.hidden;
    const ht = document.getElementById('hist-ticker');
    if (ht && currentSymbol) ht.textContent = currentSymbol.toUpperCase();
@@ -291,12 +293,28 @@ function wireHistoricalAnalysis() {
 function wireRealValidation() {
  const panel = document.getElementById('hist-panel');
  if (!panel) return;
+ // Ticker universe = the LIVE WATCHLIST. Render on wire-up, every time the
+ // panel is opened, and whenever the watchlist changes.
+ renderRvTickerOptions();
  const runBtn = document.getElementById('rv-run');
  if (runBtn) runBtn.addEventListener('click', showRvCallWarning);
  const selectAll = document.getElementById('rv-select-all');
  if (selectAll) selectAll.addEventListener('click', () => {
-   document.querySelectorAll('.rv-ticker').forEach((cb) => { cb.checked = true; });
+   // Operates on the currently rendered watchlist chips only.
+   const boxes = document.querySelectorAll('.rv-ticker');
+   if (!boxes.length) return; // empty watchlist — nothing to select
+   boxes.forEach((cb) => { cb.checked = true; });
  });
+ try {
+   on('watchlist:changed', () => renderRvTickerOptions());
+ } catch { /* event bus unavailable — selector still renders on panel open */ }
+}
+
+// Re-render the validation ticker checkboxes from the current Watchlist.
+function renderRvTickerOptions() {
+ const container = document.getElementById('rv-tickers');
+ if (!container) return;
+ renderRvTickerSelector(container, assets ? assets.getWatchlist() : []);
 }
 
 function selectedRvTickers() {
@@ -317,7 +335,9 @@ function showRvCallWarning() {
    warnEl.hidden = false;
    warnEl.textContent = (!realValidation)
      ? 'Validation unavailable: API client not initialized.'
-     : 'Select at least one ticker.';
+     : (assets && !assets.getWatchlist().length)
+       ? 'Your watchlist is empty — add tickers to your Watchlist first.'
+       : 'Select at least one ticker.';
    return;
  }
  const depth = (document.getElementById('rv-depth') || {}).value || '1y';
