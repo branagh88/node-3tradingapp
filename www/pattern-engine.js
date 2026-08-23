@@ -27,11 +27,145 @@ export const FEATURE_NAMES = [
 ];
 
 export const DEFAULTS = {
-  MAX_DISTANCE: 1.5,   // weighted Euclidean distance threshold in z-space
+  MAX_DISTANCE: 1.5,   // legacy threshold mode ceiling (z-space)
   MIN_MATCHES: 30,
   HORIZONS: [1, 3, 5, 10],
   VOLUME_AVG_PERIOD: 20,
+  // --- Phase 3 selective matching defaults (chosen from measured walk-forward
+  // comparisons in scripts/research/compare.mjs; see results JSON) ---
+  MATCH_MODE: 'topk',      // 'topk' | 'threshold' | 'composite'
+  K_FRACTION: 0.05,        // adaptive K = clamp(round(dbSize * K_FRACTION), ...)
+  K_MIN: 40,
+  K_MAX: 200,
+  PERCENTILE_GATE: 0.05,   // candidate must sit within the p most-similar tail
+  MIN_SIGNAL_SAMPLE: 30,   // below this the engine returns NO SIGNAL
 };
+
+/**
+ * Selective match selection from scored candidates (Phase 3).
+ *
+ * @param {Array<{index:number,t:number,distance:number}>} candidates
+ *        ALL prior qualifying days with finite distance (unsorted ok).
+ * @param {object} opts
+ * @returns {{matches:Array, matchMode:string, kUsed:number|null,
+ *            percentileCutoff:number|null, maxMatchDistance:number|null}}
+ */
+export function selectMatches(candidates, opts = {}) {
+  const {
+    matchMode = DEFAULTS.MATCH_MODE,
+    kFraction = DEFAULTS.K_FRACTION,
+    kMin = DEFAULTS.K_MIN,
+    kMax = DEFAULTS.K_MAX,
+    maxDistance = null,       // optional hard ceiling applied AFTER ranking
+    percentileGate = DEFAULTS.PERCENTILE_GATE,
+  } = opts;
+  const sorted = candidates.filter((c) => Number.isFinite(c.distance))
+    .slice().sort((a, b) => a.distance - b.distance || a.index - b.index);
+  if (!sorted.length) {
+    return { matches: [], matchMode, kUsed: null, percentileCutoff: null, maxMatchDistance: null };
+  }
+  let matches;
+  let kUsed = null;
+  let percentileCutoff = null;
+  if (matchMode === 'topk' || matchMode === 'composite') {
+    kUsed = Math.max(1, Math.min(kMax, Math.max(kMin, Math.round(sorted.length * kFraction))));
+    kUsed = Math.min(kUsed, sorted.length);
+    matches = sorted.slice(0, kUsed);
+    // Percentile gate on the candidate distance distribution (relative rarity).
+    if (percentileGate != null && percentileGate >= 0) {
+      const dists = sorted.map((c) => c.distance);
+      const cutoffIdx = Math.min(dists.length - 1, Math.floor((dists.length - 1) * percentileGate) + 1);
+      percentileCutoff = dists[cutoffIdx];
+      matches = matches.filter((m) => m.distance <= percentileCutoff + 1e-12);
+      if (!matches.length) matches = [sorted[0]]; // always keep the nearest neighbor
+    }
+  } else { // legacy threshold mode
+    matches = sorted.filter((m) => m.distance <= (maxDistance != null ? maxDistance : DEFAULTS.MAX_DISTANCE));
+  }
+  if (maxDistance != null && matchMode !== 'threshold') {
+    matches = matches.filter((m) => m.distance <= maxDistance);
+  }
+  return {
+    matches,
+    matchMode,
+    kUsed,
+    percentileCutoff,
+    maxMatchDistance: matches.length ? matches[matches.length - 1].distance : null,
+  };
+}
+
+/**
+ * Wilson score interval for a binomial proportion (95% by default).
+ * @returns {[number,number]} [lower, upper] in 0..1
+ */
+export function wilsonInterval(successes, n, z = 1.96) {
+  if (!Number.isFinite(successes) || !Number.isFinite(n) || n <= 0) return [null, null];
+  const p = successes / n;
+  const denom = 1 + (z * z) / n;
+  const center = (p + (z * z) / (2 * n)) / denom;
+  const half = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / denom;
+  return [Math.max(0, center - half), Math.min(1, center + half)];
+}
+
+// Fixed RSI regime bands (no data fitting → no leakage surface).
+const RSI_BANDS = [30, 45, 55, 70];
+function rsiBand(v) { let b = 0; while (b < RSI_BANDS.length && v > RSI_BANDS[b]) b += 1; return b; }
+
+function quantileEdges(values, qs) {
+  const s = values.slice().sort((a, b) => a - b);
+  return qs.map((q) => {
+    if (!s.length) return null;
+    const idx = (s.length - 1) * q;
+    const lo = Math.floor(idx); const hi = Math.ceil(idx);
+    return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (idx - lo);
+  });
+}
+
+function bucketOf(v, edges) {
+  let b = 0;
+  for (const e of edges) { if (v > e) b += 1; else break; }
+  return b;
+}
+
+/**
+ * Composite condition signature per qualifying index (Phase 3, Improvement 3):
+ * a conjunction tuple of discretized regimes. All quantile edges are derived
+ * from STRICTLY PRIOR qualifying days only — point-in-time, no leakage.
+ *
+ * Signature components:
+ *   rsi14 band (fixed thresholds), distFromSma20 tercile (prior quantiles),
+ *   return5d tercile (prior quantiles), volumeVsAvg20 tercile (prior quantiles),
+ *   volatility5d tercile (prior quantiles).
+ *
+ * @param {Array} featureRows output of extractFeatures(bars)
+ * @returns {Array<string|null>} signature string per index (null when not
+ *          computable or insufficient prior history).
+ */
+export function computeCompositeSignatures(featureRows) {
+  const n = featureRows.length;
+  const out = new Array(n).fill(null);
+  const past = { distFromSma20: [], return5d: [], volumeVsAvg20: [], volatility5d: [] };
+  for (let i = 0; i < n; i += 1) {
+    const row = featureRows[i];
+    if (!row || !row.features) continue;
+    const f = row.features;
+    if (past.distFromSma20.length >= 30) {
+      const sig = [
+        `rsi${rsiBand(f.rsi14)}`,
+        `sma${bucketOf(f.distFromSma20, quantileEdges(past.distFromSma20, [1 / 3, 2 / 3]))}`,
+        `r5${bucketOf(f.return5d, quantileEdges(past.return5d, [1 / 3, 2 / 3]))}`,
+        `vol${bucketOf(f.volumeVsAvg20, quantileEdges(past.volumeVsAvg20, [1 / 3, 2 / 3]))}`,
+        `vlt${bucketOf(f.volatility5d, quantileEdges(past.volatility5d, [1 / 3, 2 / 3]))}`, // prettier-ignore-line
+      ].join('|');
+      out[i] = sig;
+    }
+    past.distFromSma20.push(f.distFromSma20);
+    past.return5d.push(f.return5d);
+    past.volumeVsAvg20.push(f.volumeVsAvg20);
+    past.volatility5d.push(f.volatility5d);
+  }
+  return out;
+}
 
 function isFiniteNum(v) {
   return v != null && Number.isFinite(v);
@@ -234,7 +368,7 @@ export function classifySampleSize(n) {
   return 'STRONG SAMPLE';
 }
 
-function percentile(sorted, p) {
+export function percentile(sorted, p) {
   if (!sorted.length) return null;
   const idx = (sorted.length - 1) * p;
   const lo = Math.floor(idx);
@@ -291,18 +425,34 @@ export function computeMatchedForwardOutcomes(bars, matchIndexes, horizons = DEF
  * Full transparent pattern analysis against the LATEST bar.
  * All computation is local; no network calls.
  *
+ * Phase 3 additions: selective matching (matchMode 'topk' default with an
+ * adaptive-K + percentile gate; 'threshold' keeps legacy behavior;
+ * 'composite' uses discretized multi-feature conjunction signatures and can
+ * relax to topk when too few identical-signature days exist), activeFeatures
+ * subsetting (ablation), and honest sample-size metadata on every horizon.
+ *
  * @param {object} opts
  * @param {Array} opts.bars chronologically sorted daily candles
- * @param {number} [opts.maxDistance] similarity threshold (z-space)
+ * @param {string} [opts.matchMode] 'topk' | 'threshold' | 'composite'
+ * @param {number} [opts.maxDistance] similarity threshold ('threshold' mode only)
+ * @param {number} [opts.kFraction] adaptive-K fraction of database size
+ * @param {number} [opts.percentileGate] relative-rarity cutoff p (topk/composite)
  * @param {number} [opts.minMatches] minimum desired matches (~30)
  * @param {number[]} [opts.horizons]
+ * @param {string[]} [opts.activeFeatures] subset of FEATURE_NAMES to use
  * @param {Object<string,number>} [opts.weights] per-feature weights
  */
 export function analyzePattern({
   bars,
+  matchMode = DEFAULTS.MATCH_MODE,
   maxDistance = DEFAULTS.MAX_DISTANCE,
+  kFraction = DEFAULTS.K_FRACTION,
+  kMin = DEFAULTS.K_MIN,
+  kMax = DEFAULTS.K_MAX,
+  percentileGate = DEFAULTS.PERCENTILE_GATE,
   minMatches = DEFAULTS.MIN_MATCHES,
   horizons = DEFAULTS.HORIZONS,
+  activeFeatures = null,
   weights = {},
 } = {}) {
   if (!bars || bars.length === 0) {
@@ -316,24 +466,61 @@ export function analyzePattern({
   const { normalized } = normalizeFeatures(rows);
   const currentVector = normalized[bars.length - 1];
 
-  // Matches: any PRIOR qualifying day within the distance threshold.
-  const matchRows = [];
+  // Effective weights: zero-out inactive features (ablation support) so that
+  // normalization statistics stay untouched but excluded features cannot
+  // contribute to distance.
+  const effWeights = { ...weights };
+  const usedFeatures = activeFeatures != null ? activeFeatures : FEATURE_NAMES;
+  for (const f of FEATURE_NAMES) {
+    if (!usedFeatures.includes(f)) effWeights[f] = 0;
+  }
+
+  // Candidates: every PRIOR qualifying day with a finite distance.
+  const candidates = [];
   const contributionsAccum = {};
   for (let i = 0; i < bars.length - 1; i += 1) {
     const vec = normalized[i];
     if (!vec || vec.return1d == null) continue;
-    const { distance, contributions } = weightedDistance(currentVector, vec, weights);
+    const { distance, contributions } = weightedDistance(currentVector, vec, effWeights);
     if (!Number.isFinite(distance)) continue;
-    if (distance <= maxDistance) {
-      matchRows.push({ index: i, t: rows[i].t, distance });
-      for (const f of FEATURE_NAMES) {
-        if (contributions[f] != null) {
-          contributionsAccum[f] = (contributionsAccum[f] || 0) + contributions[f];
-        }
+    candidates.push({ index: i, t: rows[i].t, distance });
+  }
+
+  // Composite mode: prefer identical-signature prior days; fall back to top-K
+  // when the identical-signature sample is too small.
+  let selection = selectMatches(candidates, {
+    matchMode, maxDistance, kFraction, kMin, kMax, percentileGate,
+  });
+  let compositeSignature = null;
+  let compositeRelaxed = false;
+  if (matchMode === 'composite') {
+    const signatures = computeCompositeSignatures(rows);
+    compositeSignature = signatures[bars.length - 1];
+    const sameSig = signatures
+      .map((sig, i) => ({ index: i, t: rows[i].t, sig }))
+      .filter((x) => x.sig != null && x.sig === compositeSignature && x.index < bars.length - 1);
+    if (sameSig.length >= minMatches) {
+      const candByIndex = new Map(candidates.map((c) => [c.index, c]));
+      selection = {
+        matches: sameSig.map((x) => candByIndex.get(x.index)).filter(Boolean)
+          .sort((a, b) => a.distance - b.distance),
+        matchMode: 'composite', kUsed: sameSig.length,
+        percentileCutoff: null, maxMatchDistance: null,
+      };
+    } else {
+      compositeRelaxed = true;
+    }
+  }
+  const matchRows = selection.matches;
+  for (const m of matchRows) {
+    const vec = normalized[m.index];
+    const { contributions } = weightedDistance(currentVector, vec, effWeights);
+    for (const f of usedFeatures) {
+      if (contributions[f] != null) {
+        contributionsAccum[f] = (contributionsAccum[f] || 0) + contributions[f];
       }
     }
   }
-  matchRows.sort((a, b) => a.distance - b.distance);
 
   // Top contributing features: highest average weighted squared deviation
   // among matched days (what most drives the similarity).
@@ -354,6 +541,13 @@ export function analyzePattern({
     conditionTime: latestRow.t,
     matches: matchRows,
     matchCount: matchRows.length,
+    matchMode: selection.matchMode,
+    kUsed: selection.kUsed,
+    percentileCutoff: selection.percentileCutoff,
+    maxMatchDistance: selection.maxMatchDistance,
+    compositeSignature,
+    compositeRelaxed,
+    activeFeatures: usedFeatures.slice(),
     threshold: maxDistance,
     minMatches,
     meetsMinMatches: matchRows.length >= minMatches,
