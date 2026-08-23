@@ -13,6 +13,10 @@
 // driven only, so no information is ever lost and no JS resize logic runs.
 
 import { esc } from './utils.js';
+import {
+  buildValidationDetailsHtml,
+  rvStateBadgeHtml,
+} from './rv-status.js';
 
 export const RV_UI_HORIZONS = [1, 3, 5, 10];
 
@@ -83,15 +87,18 @@ export function rvHorizonCard(h, p) {
  * @param {object} r validation report from RealValidationController.run()
  * @returns {string} HTML
  */
-export function renderRealValidationResults(r) {
+export function renderRealValidationResults(r, options = {}) {
   if (!r) return '';
+  const diagnostics = r.diagnostics || options.diagnostics || null;
   let html = '<h4>Datasets</h4>'
     + '<div class="rv-table-wrap"><table class="table"><thead><tr>'
     + '<th>Ticker</th><th>Status</th><th>Candles</th><th>Range</th><th>API reqs</th><th>Source</th>'
     + '</tr></thead><tbody>';
   for (const sym of r.included || []) {
     const t = r.perTicker[sym] || {};
-    html += `<tr><td>${esc(sym)}</td><td>${esc(t.status || '\u2014')}</td><td>${fmtNum(t.candles, 0)}</td>`
+    const diag = diagnostics ? diagnostics[sym] : null;
+    html += `<tr><td>${esc(sym)}</td><td>${esc(t.status || '\u2014')}${
+      diag && diag.finalState ? ` ${rvStateBadgeHtml(diag.finalState)}` : ''}</td><td>${fmtNum(t.candles, 0)}</td>`
       + `<td>${esc(t.dateRange || '\u2014')}</td><td>${fmtNum(t.apiRequests, 0)}</td>`
       + `<td>${t.fromCache ? '(cached, 0 API calls)' : 'fresh'}</td></tr>`;
   }
@@ -103,6 +110,11 @@ export function renderRealValidationResults(r) {
         + `<td><button type="button" class="btn btn--sm btn--ghost" data-rv-retry="${esc(s.ticker)}">Retry</button></td></tr>`;
     }
     html += '</tbody></table></div>';
+  }
+  // Phase 8: collapsed per-run diagnostics block — only when the report
+  // carries diagnostics; plain-text rendering stays identical otherwise.
+  if (diagnostics) {
+    html += buildValidationDetailsHtml(diagnostics);
   }
   html += '<h4>Pooled horizons</h4>';
   // Desktop: original table (CSS-hidden on narrow screens).

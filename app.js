@@ -14,6 +14,13 @@ import { HistoricalAnalysisController } from './historical-analysis.js';
 import { RealValidationController, formatCallWarning } from './real-validation.js';
 import { renderRvTickerSelector } from './rv-ticker-selector.js';
 import { renderRealValidationResults } from './real-validation-ui.js';
+import {
+  applyRvEvent,
+  createTickerStatus,
+  rvStatusStripHtml,
+  safeErrorInfo,
+  formatRvRetryError,
+} from './rv-status.js';
 import { analyzePattern } from './pattern-engine.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
@@ -350,6 +357,8 @@ function showRvCallWarning() {
  confirmBtn.addEventListener('click', () => { warnEl.hidden = true; runRealValidation(); });
  cancelBtn.addEventListener('click', () => {
    warnEl.hidden = true;
+   const st = document.getElementById('rv-status');
+   if (st) { st.hidden = true; st.innerHTML = ''; }
    setRvProgress('', true);
  });
  warnEl.appendChild(confirmBtn);
@@ -386,22 +395,48 @@ async function runRealValidation() {
  resultsEl.innerHTML = '';
  progressEl.hidden = false;
  progressEl.textContent = 'Starting validation…';
+ // Phase 8: per-ticker live status strip (READY for all selected tickers).
+ const statusEl = document.getElementById('rv-status');
+ let rvStatusMap = new Map(tickers.map((t) => [t.toUpperCase(), createTickerStatus(t)]));
+ const paintRvStatus = () => {
+   if (!statusEl) return;
+   statusEl.hidden = false;
+   statusEl.innerHTML = rvStatusStripHtml(Array.from(rvStatusMap.values()));
+ };
+ if (statusEl) paintRvStatus();
  if (runBtn) runBtn.disabled = true;
  try {
    const result = await realValidation.run({
      tickers,
      depth,
      useCache,
-     onProgress: ({ phase, message }) => {
+     onProgress: ({ phase, message, ...evt }) => {
+       try {
+         if (phase !== 'DONE') { rvStatusMap = applyRvEvent(rvStatusMap, evt); paintRvStatus(); }
+       } catch { /* status strip must never break the run */ }
        progressEl.hidden = phase === 'DONE';
        progressEl.textContent = message || '';
      },
    });
+   if (statusEl) { statusEl.hidden = true; statusEl.innerHTML = ''; }
    resultsEl.innerHTML = renderRealValidationResults(result);
    wireRvRetryButtons(result);
  } catch (err) {
    errorEl.hidden = false;
    const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
+   // Phase 8: leave the strip visible with non-completed tickers flipped to
+   // ERROR via the reducer (never ad-hoc mutation), for failure context.
+   try {
+     for (const [k, s] of Array.from(rvStatusMap.entries())) {
+       if (s.state === 'COMPLETE' || s.state === 'INSUFFICIENT DATA') continue;
+       rvStatusMap = applyRvEvent(rvStatusMap, {
+         phase: 'TICKER_FAILED', ticker: k,
+         failure: safeErrorInfo({ ticker: k, operation: 'validation_run', err }),
+       });
+     }
+     paintRvStatus();
+   } catch { /* diagnostics must never mask the original error */ }
+   console.warn('[RV] run failed', safeErrorInfo({ operation: 'validation_run', err }));
    errorEl.innerHTML = `<strong>Real validation failed.</strong><br>`
      + `Status: ${esc(status)}<br>`
      + `Error type: ${esc((err && err.name) || 'Error')}<br>`
@@ -431,6 +466,17 @@ function wireRvRetryButtons(r) {
            wireRvRetryButtons(full);
          }
        } catch (err) {
+         // Phase 8 fix (spec §3.4): never swallow retry errors silently.
+         const sanitized = safeErrorInfo({ operation: 'retry_validation', err });
+         console.warn('[RV] retry failed', sanitized);
+         const errorBanner = document.getElementById('rv-error');
+         if (errorBanner) {
+           errorBanner.hidden = false;
+           errorBanner.innerHTML = `<strong>${esc(formatRvRetryError(err))}</strong>`
+             + `<br>Error type: ${esc(sanitized.errorName || 'Error')}`
+             + ` | Stage: ${esc(sanitized.stage)}`
+             + ` | HTTP status: ${esc(String(sanitized.httpStatus == null ? 'n/a' : sanitized.httpStatus))}`;
+         }
          btn.disabled = false;
        }
      });

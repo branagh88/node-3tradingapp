@@ -14,6 +14,12 @@ import { DEPTH_OPTIONS } from './historical-analysis.js';
 import { poolHorizonCells, wilsonInterval, bootstrapCI } from './pooled-stats.js';
 import { DEFAULTS as PATTERN_DEFAULTS } from './pattern-engine.js';
 import { walkForwardParameterSearch } from './prediction-engine.js';
+import {
+  RV_STATES,
+  applyRvEvent,
+  createTickerStatus,
+  safeErrorInfo,
+} from './rv-status.js';
 
 // NOTE: the validation ticker universe is NOT hardcoded here anymore.
 // It comes from the live Watchlist (assets.getWatchlist(), localStorage via
@@ -111,6 +117,13 @@ export class RealValidationController {
     const retrieved = [];
     const skipped = [];
     const perTicker = {};
+    // Phase 8: per-ticker diagnostic bookkeeping (observational only — the
+    // retrieval sequence, retry policy, gate and report shape are unchanged).
+    const diagState = { map: new Map(requested.map((t) => [t, createTickerStatus(t)])) };
+    const diagEvent = (evt) => {
+      try { report(evt); } catch { /* diagnostics must never break the run */ }
+      try { diagState.map = applyRvEvent(diagState.map, evt); } catch { /* ignore */ }
+    };
     let apiCallsSpent = 0;
     let cachedDatasets = 0;
 
@@ -121,6 +134,11 @@ export class RealValidationController {
       report({ phase: 'RETRIEVING', ticker: sym, index: idx, total: requested.length,
         message: `Retrieving ${sym}… (${idx}/${requested.length})` });
       let result = null;
+      let attempts = 0;
+      // Observational cache-state event — hist.run itself still decides.
+      diagEvent({ phase: this.hist.cache.has(`${sym}:${depth}`) ? 'CACHE_HIT' : 'FETCHING', ticker: sym });
+      attempts += 1;
+      diagEvent({ phase: 'ATTEMPT', ticker: sym, attempts });
       try {
         result = await this.hist.run({
           ticker: sym,
@@ -133,9 +151,19 @@ export class RealValidationController {
         result = null;
         // One automatic re-attempt before giving up on this ticker only.
         report({ phase: 'RETRYING', ticker: sym, message: `${sym} retrieval failed once — retrying…` });
+        attempts += 1;
+        diagEvent({ phase: 'ATTEMPT', ticker: sym, attempts });
         try {
           result = await this.hist.run({ ticker: sym, depth, useCache });
+          if (result) diagEvent({ phase: 'RETRIEVED', ticker: sym,
+            fromCache: !!result.fromCache, candles: Array.isArray(result.bars) ? result.bars.length : 0,
+            stoppedReason: result.stoppedReason ?? null,
+            httpStatus: Number.isFinite(result.error?.httpStatus) ? result.error.httpStatus : null,
+            errorName: result.error?.name ?? null, attempts });
         } catch (err2) {
+          const sanitized = safeErrorInfo({ ticker: sym, operation: 'fetch_history', err: err2, attempts, hasCache: false });
+          console.warn('[RV] ticker failed', sanitized);
+          diagEvent({ phase: 'TICKER_FAILED', ticker: sym, failure: sanitized });
           skipped.push({
             ticker: sym,
             reason: `retrieval failed twice: ${(err2 && err2.name) || 'Error'}: ${
@@ -152,10 +180,20 @@ export class RealValidationController {
 
       apiCallsSpent += result.fromCache ? 0 : (result.apiRequests || 0);
       if (result.fromCache) cachedDatasets += 1;
+      diagEvent({ phase: 'RETRIEVED', ticker: sym,
+        fromCache: !!result.fromCache, status: result.status,
+        candles: Array.isArray(result.bars) ? result.bars.length : 0,
+        apiRequests: result.apiRequests || 0,
+        stoppedReason: result.stoppedReason ?? null,
+        errorName: result.error?.name ?? null,
+        httpStatus: Number.isFinite(result.error?.httpStatus) ? result.error.httpStatus : null,
+        attempts });
 
       // Honest failure states → one retry, then skip. Never fabricate bars.
       if (result.stoppedReason === 'error' || result.stoppedReason === 'rate_limited') {
         report({ phase: 'RETRYING', ticker: sym, message: `${sym} retrieval stopped (${result.stoppedReason}) — retrying…` });
+        attempts += 1;
+        diagEvent({ phase: 'ATTEMPT', ticker: sym, attempts });
         try {
           // Evict the failed PARTIAL result from the session cache so the
           // single re-attempt actually refetches instead of replaying cache.
@@ -165,6 +203,10 @@ export class RealValidationController {
           result = retry;
         } catch { /* fall through to skip handling below */ }
         if (result.stoppedReason === 'error' || result.stoppedReason === 'rate_limited') {
+          const sanitized = safeErrorInfo({ ticker: sym, operation: 'fetch_history', err: result.error || null,
+            stoppedReason: result.stoppedReason, attempts: 2, hasCache: false });
+          console.warn('[RV] ticker failed', sanitized);
+          diagEvent({ phase: 'TICKER_FAILED', ticker: sym, failure: sanitized });
           skipped.push({ ticker: sym, reason: `retrieval stopped: ${result.stoppedReason}` });
           continue;
         }
@@ -172,6 +214,8 @@ export class RealValidationController {
 
       // Dataset gate: <200 candles → excluded (Phase 5 minimum), no substitution.
       if (!Array.isArray(result.bars) || result.bars.length < MIN_DATASET_BARS) {
+        diagEvent({ phase: 'TICKER_DONE', ticker: sym, outcome: 'insufficient_data',
+          candles: result.bars ? result.bars.length : 0, attempts });
         skipped.push({
           ticker: sym,
           reason: `insufficient history: ${result.bars ? result.bars.length : 0} candles (<${MIN_DATASET_BARS})`,
@@ -183,11 +227,19 @@ export class RealValidationController {
 
       // --- Engine execution (UNCHANGED engines), UI paints between tickers. ---
       report({ phase: 'BACKTESTING', ticker: sym, message: `Walk-forward on ${sym}…` });
+      diagEvent({ phase: 'BACKTESTING', ticker: sym });
       await Promise.resolve(); // yield so the browser can paint
       let search;
       try {
         search = walkForwardParameterSearch({ bars: result.bars, horizons: [...RV_HORIZONS] });
       } catch (err) {
+        // The ticker was optimistically added to `retrieved` before the engine
+        // ran — remove it so pooling only sees engines that succeeded.
+        const ri = retrieved.indexOf(sym);
+        if (ri !== -1) retrieved.splice(ri, 1);
+        const sanitized = safeErrorInfo({ ticker: sym, operation: 'walk_forward', err, attempts, hasCache: true });
+        console.warn('[RV] ticker failed', sanitized);
+        diagEvent({ phase: 'TICKER_FAILED', ticker: sym, failure: { ...sanitized, candles: result.bars.length } });
         skipped.push({
           ticker: sym,
           reason: `walk-forward failed: ${(err && err.name) || 'Error'}: ${String((err && err.message) || err)}`,
@@ -217,6 +269,8 @@ export class RealValidationController {
         horizons,
         correctnessSeries,
       };
+      diagEvent({ phase: 'TICKER_DONE', ticker: sym, outcome: 'complete',
+        candles: result.bars.length, attempts, fromCache: !!result.fromCache });
     }
 
     // --- Pooling across included tickers. ---
@@ -241,6 +295,25 @@ export class RealValidationController {
       pooled[h] = { ...pool, bootstrapCI: boot, overlapAwareEdge };
     }
 
+    // --- Per-ticker diagnostics (Phase 8) — derived from the SAME reducer
+    // helpers used by the live UI so the logic is tested once. ---
+    const diagnostics = {};
+    for (const [sym, st] of diagState.map.entries()) {
+      diagnostics[sym] = {
+        ticker: sym,
+        finalState: st.state || RV_STATES.READY,
+        source: st.fromCache ? 'session cache' : 'fresh fetch',
+        fromCache: !!st.fromCache,
+        hasCache: !!st.fromCache,
+        attempts: st.attempts,
+        candles: st.candles,
+        stoppedReason: st.stoppedReason,
+        httpStatus: st.httpStatus,
+        operation: st.operation,
+        stage: st.stage,
+      };
+    }
+
     const finishedAt = new Date().toISOString();
     const out = {
       requested,
@@ -250,6 +323,7 @@ export class RealValidationController {
       skipped,
       perTicker,
       pooled,
+      diagnostics,
       totals: {
         apiCallsSpent,
         cachedDatasets,
