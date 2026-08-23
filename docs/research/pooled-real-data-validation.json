@@ -1,0 +1,38 @@
+{
+  "status": "BLOCKED_NO_CREDENTIAL",
+  "phase": "Phase 5 — Pooled real-data validation",
+  "generatedAt": "2026-08-23T17:34:45.227Z",
+  "gitCommit": "6e8d668",
+  "tickerUniverseRequested": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "META",
+    "GOOGL",
+    "TSLA",
+    "GME"
+  ],
+  "tickersTested": [],
+  "reason": "No Tickerbot API credential available in this dev environment (secure runtime store empty; env TICKERBOT_API_KEY unset). Per phase rules: BLOCKED — no synthetic data substituted, no claims made.",
+  "methodology": {
+    "design": "Pooled multi-ticker chronological walk-forward of the UNCHANGED prediction-engine.walkForwardParameterSearch (train 60% → validation 20% → test 20% per ticker); pooled out-of-sample TEST predictions compared with eligibility-weighted baselines (dominant direction, always-up, trailing-5d momentum).",
+    "leakageControls": [
+      "point-in-time features only (row i uses bars ≤ i)",
+      "training/database strictly before prediction date (chronological split)",
+      "normalization at row i uses only prior rows (engine-internal, unchanged)",
+      "parameters chosen on validation rows only; test evaluated once",
+      "no threshold or algorithm changes were made after seeing results"
+    ],
+    "poolingRules": [
+      "pool = sum of all tickers’ out-of-sample signaled TEST predictions per horizon",
+      "baselines pooled eligibility-weighted across tickers",
+      "verdict INSUFFICIENT EVIDENCE if pooled signals < 30",
+      "EDGE iff pooled accuracy > best pooled baseline AND Wilson-95%-low > baseline AND p < 0.05",
+      "otherwise NO EDGE; NO-SIGNAL rows are allowed and never counted as errors"
+    ]
+  },
+  "datasets": [],
+  "pooledResults": null,
+  "note": "This file will be overwritten with empirical numbers when real cached data exists."
+}
