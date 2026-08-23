@@ -192,7 +192,7 @@ export class HistorySource {
         if (err instanceof RateLimitError || (err && err.kind === 'rate_limit')) {
           // One delayed retry for the SAME page; second 429 stops gracefully.
           try {
-            await this.sleep(this.limits.MIN_REQUEST_GAP_MS * 4);
+            await this.sleep(this.limits.RATE_LIMIT_RETRY_MS ?? this.limits.MIN_REQUEST_GAP_MS * 4);
             await this.rateLimiter.acquire();
             const res = await this.fetchPage({
               ticker, interval, from, to, limit: this.limits.PAGE_SIZE,
