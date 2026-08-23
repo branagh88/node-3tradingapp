@@ -611,3 +611,83 @@ code {
 .settings-status-banner.status--unconfigured { border-color: var(--text-dim, #888); color: var(--text-dim, #888); }
 .settings-status-banner.status--missing-key { border-color: #d08420; color: #ffc46b; background: rgba(208, 132, 32, .08); }
 .settings-status-banner.status--ok { border-color: #2e9e5b; color: #7fe0a4; background: rgba(46, 158, 91, .08); }
+
+/* ------------------------------------------------------------------ */
+/* RUN REAL VALIDATION — responsive results (UI-only)                   */
+/* ------------------------------------------------------------------ */
+
+#hist-results,
+#rv-results,
+.rv-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Safety net: wide tables scroll inside their own container on desktop
+   instead of forcing page-level horizontal scroll. */
+.rv-table-wrap { overflow-x: auto; }
+.rv-table-wrap .table { min-width: 0; }
+
+/* Edge pp color coding (positive green / negative red / neutral dim). */
+.rv-edge--pos { color: var(--ok, #3aa876); font-weight: 650; font-variant-numeric: tabular-nums; }
+.rv-edge--neg { color: var(--danger, #d06161); font-weight: 650; font-variant-numeric: tabular-nums; }
+.rv-edge--zero { color: var(--text-dim, #8a93a6); font-variant-numeric: tabular-nums; }
+
+/* Distinct verdict badges: EDGE (green) / NO EDGE (muted) / INSUFFICIENT (amber). */
+.badge--edge { color: var(--ok, #3aa876); border: 1px solid rgba(58, 168, 118, 0.45); background: rgba(58, 168, 118, 0.12); }
+.badge--no-edge { color: var(--text-dim, #8a93a6); border: 1px solid var(--border, #444); background: transparent; }
+.badge--insufficient { color: var(--warn, #e0a63c); border: 1px solid rgba(224, 166, 60, 0.45); background: rgba(224, 166, 60, 0.10); }
+
+/* Stacked per-horizon cards — hidden on desktop where the table is used. */
+.rv-cards { display: none; }
+
+@media (max-width: 860px) {
+  /* Phone portrait: hide the pooled table, show stacked cards instead. */
+  .rv-pooled-desktop { display: none; }
+  .rv-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .rv-card {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-card, #101724);
+    border: 1px solid var(--border, #2a3446);
+    border-radius: 10px;
+    padding: 10px 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .rv-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .rv-card__title { margin: 0; font-size: 15px; }
+  .rv-card__verdict { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+  .rv-card__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 13px;
+    min-width: 0;
+  }
+  .rv-card__label { color: var(--text-dim, #8a93a6); flex-shrink: 0; }
+  .rv-card__value { text-align: right; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+
+  /* Datasets / Skipped tables stay readable without page-level scroll. */
+  #rv-results .table { font-size: 12px; }
+}
