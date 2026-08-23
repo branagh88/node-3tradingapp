@@ -288,14 +288,31 @@ async _doFetch(path, options = {}) {
     if (isNative) {
       strategy = 'native'; // TEMP-DIAGNOSTIC (revert later)
       const { Http } = await import('./vendor/http-plugin.js');
-      const nativeRes = await Http.request({
-        url: finalUrl,
-        method,
-        headers,
-        data: options.body || undefined,
-        connectTimeout: this.timeoutMs,
-        readTimeout: this.timeoutMs,
+      // The native bridge's AbortController-based timer (above) cannot cancel
+      // an in-flight Http.request, so race it against our own JS timer and
+      // treat the timer firing as a rejection. Without this, a hung native
+      // request hangs forever (the historical-data chart 'Loading candles…'
+      // freeze).
+      let nativeTimeoutTimer;
+      const nativeTimeoutPromise = new Promise((_, reject) => {
+        nativeTimeoutTimer = setTimeout(() => {
+          const tErr = new Error('HISTORICAL REQUEST TIMEOUT');
+          tErr.kind = 'timeout';
+          tErr.status = 0;
+          reject(tErr);
+        }, this.timeoutMs);
       });
+      const nativeRes = await Promise.race([
+        Http.request({
+          url: finalUrl,
+          method,
+          headers,
+          data: options.body || undefined,
+          connectTimeout: this.timeoutMs,
+          readTimeout: this.timeoutMs,
+        }),
+        nativeTimeoutPromise,
+      ]).finally(() => clearTimeout(nativeTimeoutTimer));
       strategy = 'native';
       // @capacitor-community/http returns the body in `data` (string when
       // responseType is text/json-as-string, pre-parsed object otherwise).
@@ -330,6 +347,10 @@ async _doFetch(path, options = {}) {
       strategyErrors = [];
     }
   } catch (err) {
+    if (err && err.message === 'HISTORICAL REQUEST TIMEOUT') {
+      console.error(`[api] ${method} ${safeUrl} NATIVE TIMEOUT after ${this.timeoutMs}ms`);
+      throw new ApiError('timeout', 'HISTORICAL REQUEST TIMEOUT', 0);
+    }
     if (err.name === 'AbortError') throw new ApiError('timeout', 'Request timed out', 0);
     // TEMP-DIAGNOSTIC (revert later): capture the EXACT native failure fields
     // (strategy that ran + full error object) so logcat shows the real cause.
@@ -571,8 +592,14 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     limit: '1000'
   });
   const url = `/v2/tickers/${encodeURIComponent(sym)}/bars/${spec.interval}?${params.toString()}`;
+  // TEMP-DIAGNOSTIC (revert later): trace the historical-data lifecycle.
+  // Never logs the API key or Authorization header (URL is redacted).
+  const histStart = Date.now();
+  console.log(`HISTORY REQUEST START ticker=${sym} range=${range} interval=${spec.interval} url=${redactUrl(this.buildUrl(url))}`);
   try {
-    const { data } = await this._doFetch(url);
+    const { data, meta } = await this._doFetch(url);
+    console.log(`HISTORY RESPONSE RECEIVED status=${meta && meta.status != null ? meta.status : 'N/A'} elapsed_ms=${Date.now() - histStart}`);
+    console.log(`HISTORY RESPONSE type=${Array.isArray(data) ? 'array' : typeof data} topKeys=${data && typeof data === 'object' && !Array.isArray(data) ? JSON.stringify(Object.keys(data)) : '[]'}`);
     // Tolerant unwrap of the bars envelope: documented shape is
     // { as_of, ticker, interval, count, next_cursor, bars:[{t,o,h,l,c,v}] }
     // but accept {bars|data|candles:[...]} or a bare array. Field-name
@@ -587,6 +614,7 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     } else {
       candles = [];
     }
+    console.log(`HISTORY RESPONSE barCount=${candles.length}`);
     const mapped = candles.map(c => ({
       time: Math.floor(new Date(c.time ?? c.t ?? c.timestamp ?? Date.now()).getTime() / 1000),
       open: Number(c.open ?? c.o ?? 0),
@@ -603,8 +631,10 @@ async getHistoricalData(ticker, range = '1D', resolution = '5m') {
     if (!looksExpected) {
       console.warn(`[api] historical-data unexpected response shape for ${sym}: ${describeShape(data)} url=${redactUrl(this.buildUrl(url))}`);
     }
+    console.log(`HISTORY PARSE COMPLETE bars=${mapped.length}`);
     return mapped;
   } catch (err) {
+    console.error(`HISTORY REQUEST ERROR name=${err && err.name} message=${err && err.message} status=${(err && err.status) ?? (err && err.statusCode) ?? 'N/A'}`);
     // DIAGNOSTIC: never silently swallow into []. Report HTTP status (when we
     // have one), the redacted request URL, and the error kind/message.
     const status = err && err.status != null ? err.status : (err && err.statusCode) ?? 'N/A';
