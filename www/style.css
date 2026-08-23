@@ -694,3 +694,87 @@ code {
   /* Datasets / Skipped tables stay readable without page-level scroll. */
   #rv-results .table { font-size: 12px; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 8 — per-ticker validation status layer (#rv-status strip +    */
+/* collapsed "Validation Details" block).                              */
+/* ------------------------------------------------------------------ */
+
+.rv-status {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+}
+.rv-status__rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rv-status__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rv-status-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border, #444);
+  white-space: nowrap;
+}
+.rv-status-badge--ready { color: var(--text-dim, #8a93a6); background: transparent; }
+.rv-status-badge--fetching-history,
+.rv-status-badge--using-cache,
+.rv-status-badge--validating { color: var(--warn, #e0a63c); border-color: rgba(224, 166, 60, 0.45); background: rgba(224, 166, 60, 0.10); }
+.rv-status-badge--complete { color: var(--ok, #3aa876); border-color: rgba(58, 168, 118, 0.45); background: rgba(58, 168, 118, 0.12); }
+.rv-status-badge--insufficient-data { color: var(--warn, #e0a63c); border-color: rgba(224, 166, 60, 0.45); background: rgba(224, 166, 60, 0.10); }
+.rv-status-badge--error { color: var(--danger, #d06161); border-color: rgba(208, 97, 97, 0.5); background: rgba(208, 97, 97, 0.12); }
+
+/* Collapsed diagnostics block — rendered without `open`. */
+.rv-details {
+  margin: 10px 0;
+  border: 1px solid var(--border, #2a3446);
+  border-radius: 10px;
+  background: var(--bg-card, #101724);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.rv-details > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-weight: 650;
+}
+.rv-details .rv-table-wrap { padding: 0 8px 8px; }
+.rv-details-table th, .rv-details-table td { font-variant-numeric: tabular-nums; }
+.rv-details__pair {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+  font-size: 13px;
+  min-width: 0;
+}
+.rv-details__label { color: var(--text-dim, #8a93a6); flex-shrink: 0; }
+.rv-details__value { text-align: right; font-family: ui-monospace, monospace; min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 860px) {
+  /* Stacked label/value pairs instead of a wide table on narrow screens. */
+  .rv-details .rv-table-wrap { padding: 0 8px 8px; }
+  .rv-details-table thead { display: none; }
+  .rv-details-table tr { display: block; padding: 6px 0; border-bottom: 1px solid var(--border, #2a3446); }
+  .rv-details-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .rv-details__error-row { display: block; }
+}
