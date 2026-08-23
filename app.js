@@ -1,5 +1,5 @@
 // app.js — Main UI Controller & Router
-import { on, logger, esc, fmtPrice, fmtPct, fmtVolume, fmtTime } from './utils.js';
+import { on, logger, esc, fmtPrice, fmtPct, fmtVolume, fmtTime, bus } from './utils.js';
 import { storage } from './storage.js';
 import { loadConfig, saveConfig, isConfigured, hasApiKey, configStatus, isValidHttpUrl, API_CONFIG, DEFAULTS } from './config.js';
 import { getApiKey, setApiKey, clearApiKey, migrateLegacyApiKey } from './secure-store.js';
@@ -313,7 +313,7 @@ function wireRealValidation() {
    boxes.forEach((cb) => { cb.checked = true; });
  });
  try {
-   on('watchlist:changed', () => renderRvTickerOptions());
+   bus.on('watchlist:changed', () => renderRvTickerOptions());
  } catch { /* event bus unavailable — selector still renders on panel open */ }
 }
 
