@@ -1,0 +1,7 @@
+{
+  "status": "BLOCKED_NO_API_KEY",
+  "generatedAt": "2026-08-23T16:04:36.215Z",
+  "gitCommit": "e23a7ad",
+  "message": "No cached real Tickerbot datasets found under scripts/research/data/real/. The dev environment has no Tickerbot API key (config.loadConfig never returns one; capture-aapl.mjs exits 2 for the same reason). NOTHING was fabricated: no synthetic data was substituted and no predictive claims are made. Once a key is provisioned, run:\n  TICKERBOT_API_KEY=… node scripts/research/fetch-real-bars.mjs\n  node scripts/research/run-real-validation.mjs",
+  "tickers": []
+}
