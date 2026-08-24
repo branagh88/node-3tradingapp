@@ -37,7 +37,11 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
         <span>Search</span>
       </a>
-      <a class="nav-item" href="#/settings" data-nav="settings">
+      <a class="nav-item" href="#/edge" data-nav="edge">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 3 5-6"/></svg>
+        <span>EDGE</span>
+      </a>
+<a class="nav-item" href="#/settings" data-nav="settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         <span>Settings</span>
       </a>
@@ -90,6 +94,33 @@
       <div id="search-results" class="result-list"></div>
     </section>
 
+    <!-- EDGE sports analysis -->
+    <section id="screen-edge" class="screen" hidden>
+      <div class="screen-head">
+        <h1>EDGE Analysis</h1>
+      </div>
+      <div id="edge-unconfigured" class="card edge-status-card" hidden>
+        <p class="empty-title">Odds API key required</p>
+        <p class="hint">Add your personal The Odds API key in Settings to enable the EDGE screen.</p>
+        <button id="edge-unconfigured-settings-link" type="button" class="btn btn--primary">Open Settings</button>
+      </div>
+      <div id="edge-configured" hidden>
+        <label id="edge-sport-field" class="field" hidden>
+          <span>Sport</span>
+          <select id="edge-sport-select" class="select"></select>
+        </label>
+        <div id="edge-sport-status" hidden></div>
+        <div id="edge-events" class="result-list"></div>
+        <div id="edge-events-status" hidden></div>
+        <div class="edge-actions">
+          <button id="edge-analyze" type="button" class="btn btn--primary" disabled>Analyze</button>
+          <button id="edge-research" type="button" class="btn btn--ghost" disabled>Research</button>
+        </div>
+        <div id="edge-analysis-panel" hidden></div>
+        <div id="edge-research-panel" hidden></div>
+      </div>
+    </section>
+
     <!-- Settings -->
     <section id="screen-settings" class="screen" hidden>
       <div class="screen-head">
@@ -137,6 +168,26 @@
             <span>WebSocket Endpoint (optional)</span>
             <input class="input" name="wsEndpoint" type="text" placeholder="wss://…/stream (optional)" />
           </label>
+        </div>
+
+        <div class="card">
+          <h2>Sports data keys</h2>
+          <label class="field">
+            <span>Odds API Key</span>
+            <input class="input" name="oddsApiKey" type="password" autocomplete="off" placeholder="YOUR_ODDS_API_KEY_HERE" />
+            <small class="hint">The Odds API — the-odds-api.com personal key. Stored in device secure storage (native) or local app storage (web). Never logged, never bundled.</small>
+            <small id="odds-key-saved" class="hint" hidden></small>
+          </label>
+          <label class="field">
+            <span>SerpAPI Key</span>
+            <input class="input" name="serpApiKey" type="password" autocomplete="off" placeholder="YOUR_SERPAPI_KEY_HERE" />
+            <small class="hint">SerpAPI — serpapi.com personal key, used only for the EDGE research action. Never logged, never bundled.</small>
+            <small id="serp-key-saved" class="hint" hidden></small>
+          </label>
+          <div class="field-row">
+            <button id="settings-remove-odds-key" type="button" class="btn btn--ghost">Remove Odds API key</button>
+            <button id="settings-remove-serp-key" type="button" class="btn btn--ghost">Remove SerpAPI key</button>
+          </div>
         </div>
 
         <div class="card">
@@ -294,6 +345,10 @@
     <a class="nav-item" href="#/search" data-nav="search">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       <span>Search</span>
+    </a>
+    <a class="nav-item" href="#/edge" data-nav="edge">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 3 5-6"/></svg>
+      <span>EDGE</span>
     </a>
     <a class="nav-item" href="#/settings" data-nav="settings">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
