@@ -44,6 +44,13 @@ export function estimateApiCallsForDepth(tickers, depthId) {
   };
 }
 
+/** Pure (Phase 10): cache-first gate — skip the confirm dialog entirely when
+ * every selected ticker already holds a valid cached dataset (0 fresh fetches).
+ * Never bypasses when the user disabled cache use. */
+export function shouldBypassConfirm(est) {
+  return !!est && est.freshTickers === 0;
+}
+
 /** Pure: human warning string for the pre-run confirm step. */
 export function formatCallWarning({ totalEstimatedCalls, cachedTickers = 0, freshTickers = 0, depthId = '1y' }) {
   return `Estimated API calls: ${totalEstimatedCalls} `
@@ -97,6 +104,24 @@ export class RealValidationController {
   }
 
   /**
+   * Phase 10: per-ticker cache status for the pre-fetch estimate panel.
+   * PURE w.r.t. network — reads only the shared session cache.
+   * @returns {{ perTicker: Array<{ticker, cached, valid}>, pagesPerTicker,
+   *            totalEstimatedCalls, cachedTickers, freshTickers }}
+   */
+  estimatePerTicker(tickers, depthId) {
+    const list = (Array.isArray(tickers) ? tickers : [])
+      .map((t) => String(t || '').toUpperCase()).filter(Boolean);
+    const est = this.estimateApiCalls(list, depthId);
+    const perTicker = list.map((t) => ({
+      ticker: t,
+      cached: this.hist.cache.has(`${t}:${depthId}`),
+      valid: this.hist.hasValidDataset(t, depthId),
+    }));
+    return { perTicker, ...est };
+  }
+
+  /**
    * Run validation over multiple tickers. Per-ticker failure does NOT abort
    * siblings: exactly ONE automatic retry per ticker whose retrieval stopped
    * with error/rate_limited; permanent failures land in `skipped`.
@@ -133,6 +158,11 @@ export class RealValidationController {
       // --- Retrieval via the EXISTING controller (cache-aware). ---
       report({ phase: 'RETRIEVING', ticker: sym, index: idx, total: requested.length,
         message: `Retrieving ${sym}… (${idx}/${requested.length})` });
+      // Phase 10 stale-eviction guard: a missing or PARTIAL cached entry must
+      // never be replayed as a valid hit — evict so retrieval refetches.
+      if (useCache !== false && !this.hist.hasValidDataset(sym, depth)) {
+        this.hist.cache.delete(`${sym}:${depth}`);
+      }
       let result = null;
       let attempts = 0;
       // Observational cache-state event — hist.run itself still decides.
@@ -353,6 +383,56 @@ function buildCorrectnessProxy(cell) {
   const out = new Array(n).fill(0);
   for (let i = 0; i < k; i += 1) out[i] = 1;
   return out;
+}
+
+/**
+ * Phase 10: explicit multi-ticker dataset prefetch (GET HISTORICAL DATA).
+ * Orchestration only — sequential loop of per-ticker hist.run() calls through
+ * the existing rate limiter; per-ticker failure isolation (a sibling failure
+ * NEVER evicts or invalidates another ticker's cached/successful data).
+ * @param {import('./historical-analysis.js').HistoricalAnalysisController} histController
+ * @param {object} p { tickers, depth='1y', useCache=true, onProgress }
+ * @returns {Promise<{entries: Array, failed: Array}>}
+ */
+export async function prefetchDatasets(histController, { tickers, depth = '1y', useCache = true, onProgress } = {}) {
+  if (!histController) throw new Error('prefetchDatasets requires a histController');
+  const list = (Array.isArray(tickers) ? tickers : [])
+    .map((t) => String(t || '').toUpperCase()).filter(Boolean);
+  const progress = typeof onProgress === 'function' ? onProgress : () => {};
+  const entries = [];
+  const failed = [];
+  let idx = 0;
+  for (const sym of list) {
+    idx += 1;
+    progress({ phase: 'FETCHING', ticker: sym, index: idx, total: list.length });
+    // Stale-eviction guard (mirrors run()): PARTIAL/missing entries refetch.
+    if (useCache !== false && !histController.hasValidDataset(sym, depth)) {
+      histController.cache.delete(`${sym}:${depth}`);
+    }
+    let entry;
+    try {
+      const r = await histController.run({ ticker: sym, depth });
+      const ok = r.status === 'COMPLETE' && Array.isArray(r.bars) && r.bars.length > 0;
+      entry = {
+        ticker: sym, ok, status: r.status,
+        candles: Array.isArray(r.bars) ? r.bars.length : 0,
+        apiRequests: r.apiRequests || 0, fromCache: !!r.fromCache,
+        stoppedReason: r.stoppedReason ?? null,
+        errorName: r.error?.name ?? null,
+        barsRef: r.bars || null,
+      };
+    } catch (err) {
+      entry = { ticker: sym, ok: false, status: null, candles: 0, apiRequests: 0,
+        fromCache: false, stoppedReason: 'error',
+        errorName: (err && err.name) || 'Error',
+        message: String((err && err.message) || err), barsRef: null };
+    }
+    entries.push(entry);
+    if (!entry.ok) failed.push(entry);
+    progress({ phase: 'TICKER_DONE', ticker: sym, index: idx, total: list.length, entry });
+  }
+  progress({ phase: 'DONE', total: list.length, entries, failed });
+  return { entries, failed };
 }
 
 export default RealValidationController;

@@ -232,13 +232,33 @@
         <div id="hist-error" class="error-banner" hidden></div>
         <div id="hist-results"></div>
         <hr style="margin:16px 0;border:none;border-top:1px solid var(--border,#ddd);">
+        <h3>Historical data</h3>
+        <p class="hint">Explicitly retrieve daily datasets for selected tickers into the shared session cache. Zero API calls until you press the button.</p>
+        <div class="field-row">
+          <div class="field">
+            <span>Tickers</span>
+            <div class="ms-wrap">
+              <button id="hd-ms-trigger" type="button" class="ms-trigger" aria-expanded="false" aria-haspopup="true"><span class="ms-summary">Select tickers…</span><span class="ms-caret" aria-hidden="true">▾</span></button>
+              <div id="hd-ms-popover" class="ms-popover ms-box-sizing" hidden></div>
+            </div>
+          </div>
+        </div>
+        <div id="hd-estimate" hidden></div>
+        <div class="field-row">
+          <button id="hd-fetch" type="button" class="btn btn--primary">GET HISTORICAL DATA</button>
+        </div>
+        <div id="hd-progress" class="hint" hidden></div>
+        <div id="hd-status" class="rv-status" role="status" aria-live="polite" hidden></div>
+        <div id="hd-error" class="error-banner" hidden></div>
+        <hr style="margin:16px 0;border:none;border-top:1px solid var(--border,#ddd);">
         <h3>Run Real Validation</h3>
         <p class="hint">Walk-forward validation over real retrieved datasets, pooled across selected tickers. Descriptive historical evaluation — NOT a forecast.</p>
         <div class="field-row">
           <div class="field">
             <span>Tickers</span>
-            <div id="rv-tickers" class="chip-row" role="group" aria-label="Tickers">
-              <!-- Rendered dynamically from the live Watchlist (rv-ticker-selector.js) -->
+            <div class="ms-wrap">
+              <button id="rv-ms-trigger" type="button" class="ms-trigger" aria-expanded="false" aria-haspopup="true"><span class="ms-summary">Select tickers…</span><span class="ms-caret" aria-hidden="true">▾</span></button>
+              <div id="rv-ms-popover" class="ms-popover ms-box-sizing" hidden></div>
             </div>
           </div>
           <label class="field"><span>Dataset range</span>
@@ -254,9 +274,9 @@
           </label>
         </div>
         <div class="field-row">
-          <button id="rv-select-all" type="button" class="btn btn--ghost btn--sm">Select all</button>
           <button id="rv-run" type="button" class="btn btn--primary">RUN REAL VALIDATION</button>
         </div>
+        <div id="rv-estimate" hidden></div>
         <div id="rv-call-warning" class="hint" hidden></div>
         <div id="rv-progress" hidden></div>
         <div id="rv-status" class="rv-status" role="status" aria-live="polite" hidden></div>
