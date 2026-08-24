@@ -43,6 +43,9 @@ describe('multi-select mobile safety (markup-level)', () => {
     expect(block).toContain('left: 16px');
     expect(block).toContain('right: 16px');
     expect(block).toContain('width: auto');
+    expect(block).toMatch(/bottom:\s*calc\(72px \+ env\(safe-area-inset-bottom\)\)/);
+    expect(block).not.toMatch(/top:\s*calc/);
+    expect(block).toMatch(/z-index:\s*50/);
     expect(block).toContain('.chip-row');
     expect(block).toContain('flex-wrap: wrap');
   });
