@@ -51,6 +51,16 @@ export function envelopeToPage(rawResponse) {
   return { bars: barsArr, nextCursor };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 10: cache-validity helpers (ADDITIVE ONLY). A cached dataset is valid
+// (safe to reuse at zero API cost) only when retrieval finished COMPLETE with
+// a non-empty bars array. Missing or PARTIAL entries are stale → evict+refetch.
+// ---------------------------------------------------------------------------
+export function isDatasetCacheEntryValid(entry) {
+  return !!entry && entry.status === 'COMPLETE'
+    && Array.isArray(entry.bars) && entry.bars.length > 0;
+}
+
 function mean(xs) {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 }
@@ -301,6 +311,12 @@ export class HistoricalAnalysisController {
 
     this.cache.set(cacheKey, result);
     return result;
+  }
+
+  /** Phase 10: true when `${TICKER}:${depthId}` holds a COMPLETE, non-empty dataset. */
+  hasValidDataset(ticker, depthId) {
+    const sym = String(ticker || '').toUpperCase();
+    return isDatasetCacheEntryValid(this.cache.get(`${sym}:${depthId}`));
   }
 
   clearCache() { this.cache.clear(); }

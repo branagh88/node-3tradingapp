@@ -46,6 +46,7 @@ const MODULES = [
   'pattern-engine.js',
   'prediction-engine.js',
   'storage.js',
+  'ticker-multiselect.js',
   'utils.js',
 ];
 

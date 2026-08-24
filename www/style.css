@@ -778,3 +778,90 @@ code {
   }
   .rv-details__error-row { display: block; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 10 — compact multi-select popovers (validation + retrieval)   */
+/* ------------------------------------------------------------------ */
+
+.ms-wrap { position: relative; width: 100%; max-width: 100%; box-sizing: border-box; }
+.ms-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a3446);
+  background: var(--bg-card, #101724);
+  color: var(--text, #e6e9f0);
+  font: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+  text-align: left;
+}
+.ms-trigger .ms-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ms-trigger .ms-caret { flex-shrink: 0; color: var(--text-dim, #8a93a6); }
+.ms-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  padding: 10px;
+  border: 1px solid var(--border, #2a3446);
+  border-radius: 10px;
+  background: var(--bg-card, #101724);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-height: 40vh;
+  overflow-y: auto;
+  min-width: 220px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+}
+.ms-box-sizing { box-sizing: border-box; }
+.ms-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.ms-options { flex-wrap: wrap; }
+
+/* Pre-fetch estimate panel (pure, zero network). */
+#rv-estimate, #hd-estimate {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--border, #2a3446);
+  border-radius: 8px;
+  font-size: 13px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.ms-est-title { font-weight: 650; margin-bottom: 4px; }
+.ms-est-line { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.ms-est-total { margin-top: 4px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+/* Retry-failed ghost button for the retrieval progress strip. */
+.hd-retry-failed { margin-top: 6px; }
+
+@media (max-width: 860px) {
+  /* Phone portrait: popover becomes fixed, full width minus margins so it can
+     never overflow a narrow viewport (no horizontal scroll at 360px). */
+  .ms-popover {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .chip-row { flex-wrap: wrap; }
+}

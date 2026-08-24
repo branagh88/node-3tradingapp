@@ -11,7 +11,8 @@ import { ChartController } from './charts.js';
 import { toast } from './notifications.js';
 import { initHistoryDiagnostics } from './history-diagnostics.js';
 import { HistoricalAnalysisController } from './historical-analysis.js';
-import { RealValidationController, formatCallWarning } from './real-validation.js';
+import { RealValidationController, formatCallWarning, shouldBypassConfirm, prefetchDatasets } from './real-validation.js';
+import { buildMultiSelectSummary, buildMultiSelectPopoverHtml, buildRvEstimatePanelHtml } from './ticker-multiselect.js';
 import { renderRvTickerSelector } from './rv-ticker-selector.js';
 import { renderRealValidationResults } from './real-validation-ui.js';
 import {
@@ -148,6 +149,7 @@ async function boot() {
   guardedWire(wireEvents, '[boot] wireEvents');
   guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
   guardedWire(wireRealValidation, '[boot] wireRealValidation');
+  guardedWire(wireHistoricalRetrieval, '[boot] wireHistoricalRetrieval');
 
   // Phase 4 — onboarding redirect (only when the app cannot poll live data:
   // no base URL OR no API key). A URL-without-key install lands on Settings
@@ -305,27 +307,237 @@ function wireRealValidation() {
  renderRvTickerOptions();
  const runBtn = document.getElementById('rv-run');
  if (runBtn) runBtn.addEventListener('click', showRvCallWarning);
- const selectAll = document.getElementById('rv-select-all');
- if (selectAll) selectAll.addEventListener('click', () => {
-   // Operates on the currently rendered watchlist chips only.
-   const boxes = document.querySelectorAll('.rv-ticker');
-   if (!boxes.length) return; // empty watchlist — nothing to select
-   boxes.forEach((cb) => { cb.checked = true; });
- });
+ // Phase 10: compact multi-select popover (chips remain the popover content;
+ // renderRvTickerSelector keeps working unchanged).
+ wireMultiselectInstance({ triggerId: 'rv-ms-trigger', popoverId: 'rv-ms-popover', containerId: 'rv-tickers' });
+ const depthSel = document.getElementById('rv-depth');
+ if (depthSel) depthSel.addEventListener('change', () => refreshRvEstimatePanels());
  try {
    bus.on('watchlist:changed', () => renderRvTickerOptions());
  } catch { /* event bus unavailable — selector still renders on panel open */ }
 }
 
-// Re-render the validation ticker checkboxes from the current Watchlist.
-function renderRvTickerOptions() {
- const container = document.getElementById('rv-tickers');
+// -------------------------------------------------------------------------
+// Phase 10 — explicit HISTORICAL DATA retrieval (GET HISTORICAL DATA).
+// Zero API calls until the button is pressed; fills the ONE shared session
+// cache (histAnalysis) used by both this panel and RUN REAL VALIDATION.
+// -------------------------------------------------------------------------
+function wireHistoricalRetrieval() {
+ const panel = document.getElementById('hist-panel');
+ if (!panel) return;
+ renderHdTickerOptions();
+ wireMultiselectInstance({ triggerId: 'hd-ms-trigger', popoverId: 'hd-ms-popover', containerId: 'hd-tickers' });
+ const fetchBtn = document.getElementById('hd-fetch');
+ if (fetchBtn) fetchBtn.addEventListener('click', () => runHistoricalDataPrefetch());
+}
+
+let hdPrefetchEntries = [];
+
+async function runHistoricalDataPrefetch(retryTargets) {
+ const fetchBtn = document.getElementById('hd-fetch');
+ const progressEl = document.getElementById('hd-progress');
+ const statusEl = document.getElementById('hd-status');
+ const errorEl = document.getElementById('hd-error');
+ if (!progressEl || !statusEl || !errorEl) return;
+ if (!histAnalysis) {
+   errorEl.hidden = false;
+   errorEl.textContent = 'Historical data retrieval failed. API client not initialized.';
+   return;
+ }
+ errorEl.hidden = true;
+ const isFirstPass = !Array.isArray(retryTargets);
+ const targets = isFirstPass ? selectedHdTickers() : retryTargets.map((t) => String(t).toUpperCase());
+ if (!targets.length) {
+   errorEl.hidden = false;
+   errorEl.textContent = 'Select at least one ticker.';
+   return;
+ }
+ const depth = (document.getElementById('rv-depth') || {}).value || '1y';
+ // Zero-API-call shortcut: every selected ticker already holds a valid cached
+ // dataset → hint only, no requests fire.
+ if (isFirstPass && targets.every((t) => histAnalysis.hasValidDataset(t, depth))) {
+   toast('All selected tickers are already cached — 0 API requests needed.', 'info');
+   hdPrefetchEntries = targets.map((t) => {
+     const entry = histAnalysis.cache.get(`${t}:${depth}`);
+     return { ticker: t, ok: true, status: entry?.status || 'COMPLETE',
+       candles: Array.isArray(entry?.bars) ? entry.bars.length : 0,
+       apiRequests: 0, fromCache: true, stoppedReason: null, barsRef: entry?.bars || null };
+   });
+   paintHdPrefetchStatus();
+   return;
+ }
+ if (fetchBtn) fetchBtn.disabled = true;
+ progressEl.hidden = false;
+ progressEl.textContent = 'Retrieving historical data…';
+ try {
+   const result = await prefetchDatasets(histAnalysis, {
+     tickers: targets,
+     depth,
+     onProgress: ({ message }) => { progressEl.textContent = message || progressEl.textContent; },
+   });
+   if (isFirstPass) hdPrefetchEntries = result.entries.slice();
+   else {
+     const bySym = new Map(result.entries.map((e) => [e.ticker, e]));
+     hdPrefetchEntries = hdPrefetchEntries.map((e) => bySym.get(e.ticker) || e);
+   }
+   paintHdPrefetchStatus();
+ } catch (err) {
+   errorEl.hidden = false;
+   errorEl.textContent = `Historical data retrieval failed: ${(err && err.message) || err}`;
+ } finally {
+   if (fetchBtn) fetchBtn.disabled = false;
+   progressEl.hidden = true;
+ }
+}
+
+function paintHdPrefetchStatus() {
+ const statusEl = document.getElementById('hd-status');
+ const progressEl = document.getElementById('hd-progress');
+ if (!statusEl) return;
+ statusEl.hidden = false;
+ statusEl.innerHTML = hdPrefetchEntries.map((e) => e.ok
+   ? `<div>✓ ${esc(e.ticker)} · ${esc(e.status || 'COMPLETE')} · ${e.candles} candles · ${e.fromCache ? 'cached' : `${e.apiRequests} reqs`}</div>`
+   : `<div>✗ ${esc(e.ticker)} · ${esc(e.stoppedReason || e.errorName || 'failed')}</div>`).join('');
+ const failed = hdPrefetchEntries.filter((e) => !e.ok);
+ if (failed.length) {
+   const btn = document.createElement('button');
+   btn.type = 'button';
+   btn.className = 'btn btn--ghost btn--sm hd-retry-failed';
+   btn.textContent = '[Retry failed]';
+   btn.addEventListener('click', async () => {
+     btn.disabled = true;
+     await runHistoricalDataPrefetch(failed.map((f) => f.ticker));
+   });
+   statusEl.appendChild(btn);
+ }
+ if (progressEl) progressEl.hidden = true;
+}
+
+function selectedHdTickers() {
+ return Array.from(document.querySelectorAll('#hd-tickers .rv-ticker:checked'))
+   .map((cb) => cb.value.toUpperCase());
+}
+
+function renderHdTickerOptions() {
+ const container = document.getElementById('hd-tickers');
  if (!container) return;
  renderRvTickerSelector(container, assets ? assets.getWatchlist() : []);
+ updateMsSummary('hd-ms-trigger', 'hd-tickers');
+ refreshRvEstimatePanels();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10 — reusable compact multi-select wiring (two independent instances).
+// Popovers are local-only DOM: opening/closing/toggling NEVER issues a request.
+// ---------------------------------------------------------------------------
+function ensureMsPopover(popoverId) {
+ const pop = document.getElementById(popoverId);
+ if (!pop || pop.childElementCount) return pop;
+ const prefix = String(popoverId).replace(/-ms-popover$/, '');
+ pop.innerHTML = buildMultiSelectPopoverHtml('', { idPrefix: prefix });
+ return pop;
+}
+
+function msCheckedSymbols(containerId) {
+ const c = document.getElementById(containerId);
+ if (!c) return [];
+ return Array.from(c.querySelectorAll('.rv-ticker:checked')).map((cb) => cb.value.toUpperCase());
+}
+
+function updateMsSummary(triggerId, containerId) {
+ const summary = document.querySelector(`#${triggerId} .ms-summary`);
+ if (!summary) return;
+ const container = document.getElementById(containerId);
+ const total = container ? container.querySelectorAll('.rv-ticker').length : 0;
+ summary.textContent = buildMultiSelectSummary(msCheckedSymbols(containerId), total);
+}
+
+function closeMsPopover(trigger, pop) {
+ pop.hidden = true;
+ trigger.setAttribute('aria-expanded', 'false');
+}
+
+function wireMultiselectInstance({ triggerId, popoverId, containerId }) {
+ const trigger = document.getElementById(triggerId);
+ const pop = ensureMsPopover(popoverId);
+ if (!trigger || !pop) return;
+ const prefix = String(popoverId).replace(/-ms-popover$/, '');
+ trigger.addEventListener('click', () => {
+   const willOpen = pop.hidden;
+   pop.hidden = !willOpen;
+   trigger.setAttribute('aria-expanded', String(willOpen));
+   if (willOpen) {
+     updateMsSummary(triggerId, containerId);
+     renderRvTickerOptions(); // refresh chips from the live Watchlist on open
+   } else {
+     trigger.focus();
+     refreshRvEstimatePanels();
+   }
+ });
+ document.addEventListener('click', (e) => {
+   if (pop.hidden) return;
+   if (pop.contains(e.target) || trigger.contains(e.target)) return;
+   closeMsPopover(trigger, pop);
+   refreshRvEstimatePanels();
+ });
+ document.addEventListener('keydown', (e) => {
+   if (e.key === 'Escape' && !pop.hidden) { closeMsPopover(trigger, pop); trigger.focus(); }
+ });
+ const selectAllBtn = document.getElementById(`${prefix}-select-all`);
+ const clearAllBtn = document.getElementById(`${prefix}-clear-all`);
+ const cont = document.getElementById(containerId);
+ if (selectAllBtn && cont) selectAllBtn.addEventListener('click', () => {
+   const boxes = cont.querySelectorAll('.rv-ticker');
+   if (!boxes.length) return; // empty watchlist — nothing to select
+   boxes.forEach((cb) => { cb.checked = true; });
+   updateMsSummary(triggerId, containerId);
+   refreshRvEstimatePanels();
+ });
+ if (clearAllBtn && cont) clearAllBtn.addEventListener('click', () => {
+   cont.querySelectorAll('.rv-ticker').forEach((cb) => { cb.checked = false; });
+   updateMsSummary(triggerId, containerId);
+   refreshRvEstimatePanels();
+ });
+ if (cont) cont.addEventListener('change', () => {
+   updateMsSummary(triggerId, containerId);
+   refreshRvEstimatePanels();
+ });
+}
+
+// Pure-local estimate panels (zero network): recompute from cache state only.
+function refreshRvEstimatePanels() {
+ if (!realValidation || typeof realValidation.estimatePerTicker !== 'function') return;
+ const depth = (document.getElementById('rv-depth') || {}).value || '1y';
+ paintRvEstimate(document.getElementById('rv-estimate'), msCheckedSymbols('rv-tickers'), depth);
+ paintRvEstimate(document.getElementById('hd-estimate'), msCheckedSymbols('hd-tickers'), depth);
+}
+
+function paintRvEstimate(el, tickers, depth) {
+ if (!el) return;
+ if (!tickers.length) { el.hidden = true; el.innerHTML = ''; return; }
+ const est = realValidation.estimatePerTicker(tickers, depth);
+ el.hidden = false;
+ el.innerHTML = buildRvEstimatePanelHtml(est.perTicker, est);
+}
+
+// Re-render BOTH validation and retrieval ticker checkboxes from the current
+// Watchlist (event-driven sync — preserved exactly, see commit 48fa639).
+function renderRvTickerOptions() {
+ // Ensure both popover shells exist before rendering into their containers.
+ ensureMsPopover('rv-ms-popover');
+ ensureMsPopover('hd-ms-popover');
+ const wl = assets ? assets.getWatchlist() : [];
+ const rvContainer = document.getElementById('rv-tickers');
+ if (rvContainer) renderRvTickerSelector(rvContainer, wl);
+ const hdContainer = document.getElementById('hd-tickers');
+ if (hdContainer) renderRvTickerSelector(hdContainer, wl);
+ updateMsSummary('rv-ms-trigger', 'rv-tickers');
+ updateMsSummary('hd-ms-trigger', 'hd-tickers');
+ refreshRvEstimatePanels();
 }
 
 function selectedRvTickers() {
- return Array.from(document.querySelectorAll('.rv-ticker:checked'))
+ return Array.from(document.querySelectorAll('#rv-tickers .rv-ticker:checked'))
    .map((cb) => cb.value.toUpperCase());
 }
 
@@ -349,10 +561,26 @@ function showRvCallWarning() {
  }
  const depth = (document.getElementById('rv-depth') || {}).value || '1y';
  const est = realValidation.estimateApiCalls(tickers, depth);
+ const useCache = !(document.getElementById('rv-use-cache')) || document.getElementById('rv-use-cache').checked;
+ // Phase 10 cache-first gate: everything valid-cached at this depth → run
+ // directly with NO confirm dialog (0 fresh API calls).
+ if (useCache && shouldBypassConfirm(est)) {
+   warnEl.hidden = true;
+   runRealValidation();
+   return;
+ }
  warnEl.hidden = false;
- warnEl.innerHTML = `${esc(formatCallWarning({ ...est, depthId: depth }))}<br>`;
+ warnEl.innerHTML = `<strong>FETCH &amp; RUN</strong><br>`
+   + `${esc(formatCallWarning({ ...est, depthId: depth }))}<br>`
+   + `New API requests required: ${est.totalEstimatedCalls}<br>`;
+ if (typeof realValidation.estimatePerTicker === 'function') {
+   const per = realValidation.estimatePerTicker(tickers, depth);
+   const mini = document.createElement('div');
+   mini.innerHTML = buildRvEstimatePanelHtml(per.perTicker, per);
+   warnEl.appendChild(mini);
+ }
  const confirmBtn = document.createElement('button');
- confirmBtn.type = 'button'; confirmBtn.className = 'btn btn--primary btn--sm'; confirmBtn.textContent = 'Confirm';
+ confirmBtn.type = 'button'; confirmBtn.className = 'btn btn--primary btn--sm'; confirmBtn.textContent = 'FETCH & RUN';
  const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'btn btn--ghost btn--sm'; cancelBtn.textContent = 'Cancel';
  confirmBtn.addEventListener('click', () => { warnEl.hidden = true; runRealValidation(); });
  cancelBtn.addEventListener('click', () => {
