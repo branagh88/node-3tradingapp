@@ -22,6 +22,8 @@ import {
   safeErrorInfo,
   formatRvRetryError,
 } from './rv-status.js';
+import { initEdgeScreen } from './edge-ui.js';
+import { setOddsApiKey, getOddsApiKey, clearOddsApiKey, setSerpApiKey, getSerpApiKey, clearSerpApiKey } from './sports-credentials.js';
 import { analyzePattern } from './pattern-engine.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
@@ -33,6 +35,7 @@ let marketData = null;
 let chart = null;
 let histAnalysis = null;
 let realValidation = null;
+let edgeUiHandle = null;
 let currentRoute = '';
 let currentSymbol = null;
 let pendingConfirm = null;
@@ -150,6 +153,7 @@ async function boot() {
   guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
   guardedWire(wireRealValidation, '[boot] wireRealValidation');
   guardedWire(wireHistoricalRetrieval, '[boot] wireHistoricalRetrieval');
+  guardedWire(() => { edgeUiHandle = initEdgeScreen(); }, '[boot] edge screen init');
 
   // Phase 4 — onboarding redirect (only when the app cannot poll live data:
   // no base URL OR no API key). A URL-without-key install lands on Settings
@@ -256,6 +260,9 @@ function router() {
    if (assets) assets.renderWatchlist();
  } else if (baseRoute === 'search') {
    $('#screen-search').hidden = false;
+ } else if (baseRoute === 'edge') {
+   $('#screen-edge').hidden = false;
+   if (edgeUiHandle) edgeUiHandle.onRouteEnter();
  } else if (baseRoute === 'settings') {
    $('#screen-settings').hidden = false;
    fillSettingsForm();
@@ -942,6 +949,31 @@ async function fillSettingsForm() {
  const buildEl = document.getElementById('settings-build');
  if (buildEl) buildEl.textContent = `Diagnostic Build: ${BUILD_INFO.commit}`;
  renderSettingsStatusBanner(cfg, storedKeyPresent);
+ // Sports keys (EDGE): presence indicators only — raw values never rendered.
+ try {
+   const oddsPresent = await hasOddsCredentialSafe();
+   const serpPresent = await hasSerpCredentialSafe();
+   setSportsKeyIndicators(oddsPresent, serpPresent);
+ } catch { /* indicators are best-effort */ }
+}
+
+async function hasOddsCredentialSafe() {
+  try { return !!(await getOddsApiKey()); } catch { return false; }
+}
+async function hasSerpCredentialSafe() {
+  try { return !!(await getSerpApiKey()); } catch { return false; }
+}
+function setSportsKeyIndicators(oddsPresent, serpPresent) {
+  const oddsEl = document.getElementById('odds-key-saved');
+  if (oddsEl) {
+    oddsEl.hidden = !oddsPresent;
+    oddsEl.textContent = oddsPresent ? '•••• Odds API key saved on this device' : '';
+  }
+  const serpEl = document.getElementById('serp-key-saved');
+  if (serpEl) {
+    serpEl.hidden = !serpPresent;
+    serpEl.textContent = serpPresent ? '•••• SerpAPI key saved on this device' : '';
+  }
 }
 
 // Status banner + saved-key indicator on the Settings screen.
@@ -1230,6 +1262,20 @@ function wireSettings() {
      updateGlobalStatus(effCfg);
      if (api) api.setConfig(effCfg);
      updateGlobalStatus(effCfg);
+     // Sports data keys (EDGE): persist BEFORE refreshing indicators; empty
+     // fields never overwrite an existing key (same overwrite guard as the
+     // main API key).
+     const elOdds = document.querySelector('[name="oddsApiKey"]');
+     const elSerp = document.querySelector('[name="serpApiKey"]');
+     try {
+       if (elOdds && elOdds.value.trim()) await setOddsApiKey(elOdds.value.trim());
+       if (elSerp && elSerp.value.trim()) await setSerpApiKey(elSerp.value.trim());
+       setSportsKeyIndicators(await hasOddsCredentialSafe(), await hasSerpCredentialSafe());
+       if (elOdds) elOdds.value = '';
+       if (elSerp) elSerp.value = '';
+     } catch (err) {
+       logger.error('[settings] failed to store sports keys', err);
+     }
      toast('Settings saved successfully', 'success');
      renderSettingsStatusBanner(newCfg, hasApiKey(effCfg));
      if (configStatus(effCfg) === 'ready') {
@@ -1256,6 +1302,32 @@ function wireSettings() {
      if (onboarding) onboarding.hidden = false;
      if (marketData) marketData.stop();
      toast('API key removed from this device', 'info');
+   });
+ }
+ // Remove Odds API key (EDGE).
+ const removeOddsBtn = document.getElementById('settings-remove-odds-key');
+ if (removeOddsBtn) {
+   removeOddsBtn.addEventListener('click', async () => {
+     try { await clearOddsApiKey(); } catch (err) {
+       logger.error('[settings] failed to remove Odds API key', err);
+     }
+     const elOdds = document.querySelector('[name="oddsApiKey"]');
+     if (elOdds) elOdds.value = '';
+     setSportsKeyIndicators(false, await hasSerpCredentialSafe());
+     toast('Odds API key removed from this device', 'info');
+   });
+ }
+ // Remove SerpAPI key (EDGE).
+ const removeSerpBtn = document.getElementById('settings-remove-serp-key');
+ if (removeSerpBtn) {
+   removeSerpBtn.addEventListener('click', async () => {
+     try { await clearSerpApiKey(); } catch (err) {
+       logger.error('[settings] failed to remove SerpAPI key', err);
+     }
+     const elSerp = document.querySelector('[name="serpApiKey"]');
+     if (elSerp) elSerp.value = '';
+     setSportsKeyIndicators(await hasOddsCredentialSafe(), false);
+     toast('SerpAPI key removed from this device', 'info');
    });
  }
  const testBtn = $('#settings-test');

@@ -865,3 +865,41 @@ code {
   }
   .chip-row { flex-wrap: wrap; }
 }
+
+/* ── EDGE screen ── */
+.edge-status-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+#edge-sport-field { max-width: 420px; }
+.edge-actions { display: flex; gap: 10px; margin: 12px 0; }
+.event-row {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%; text-align: left; padding: 10px 14px; margin-bottom: 6px;
+  background: var(--surface, rgba(255,255,255,.04));
+  border: 1px solid transparent; border-radius: 10px;
+  color: inherit; cursor: pointer; font: inherit;
+}
+.event-row:hover { filter: brightness(1.15); }
+.event-row.is-selected {
+  border-color: currentColor;
+  background: rgba(120, 170, 255, 0.12);
+}
+.event-row__title { font-weight: 600; }
+.event-row__time { font-size: 12px; opacity: .7; }
+.edge-status-banner {
+  padding: 10px 14px; border-radius: 10px; margin-bottom: 8px;
+  font-size: 13.5px;
+}
+.edge-status-banner--loading { opacity: .75; }
+.edge-status-banner--error { color: #ff9b9b; }
+.edge-status-banner--empty, .edge-status-banner--unconfigured { opacity: .8; }
+.edge-computation-card dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+  margin: 0 0 10px; font-size: 13.5px;
+}
+.edge-computation-card dt { opacity: .65; }
+.edge-computation-card dd { margin: 0; font-variant-numeric: tabular-nums; }
+.edge-outcome__name { font-weight: 650; margin-top: 10px; }
+.edge-outcome:first-child .edge-outcome__name { margin-top: 0; }
+.edge-verdict { margin-top: 10px; }
+.edge-research-card ul { list-style: none; margin: 0 0 10px; padding: 0; }
+.edge-research-item { margin-bottom: 10px; }
+.edge-research-item a { color: #7ab4ff; text-decoration: none; word-break: break-word; }
