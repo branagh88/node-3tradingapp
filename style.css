@@ -857,11 +857,16 @@ code {
      never overflow a narrow viewport (no horizontal scroll at 360px). */
   .ms-popover {
     position: fixed;
+    /* Viewport-anchored: sit just above the fixed bottom nav (which is
+       6+6px padding + ~2 rows of nav items ≈ 72px tall) so the popover is
+       fully on-screen and tappable on phones. */
+    bottom: calc(72px + env(safe-area-inset-bottom));
     left: 16px;
     right: 16px;
     width: auto;
     min-width: 0;
     max-width: none;
+    z-index: 50;
   }
   .chip-row { flex-wrap: wrap; }
 }
