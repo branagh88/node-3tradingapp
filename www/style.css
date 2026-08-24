@@ -857,6 +857,7 @@ code {
      never overflow a narrow viewport (no horizontal scroll at 360px). */
   .ms-popover {
     position: fixed;
+    top: auto;
     /* Viewport-anchored: sit just above the fixed bottom nav (which is
        6+6px padding + ~2 rows of nav items ≈ 72px tall) so the popover is
        fully on-screen and tappable on phones. */

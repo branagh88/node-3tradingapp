@@ -469,40 +469,8 @@ function wireMultiselectInstance({ triggerId, popoverId, containerId }) {
  const pop = ensureMsPopover(popoverId);
  if (!trigger || !pop) return;
  const prefix = String(popoverId).replace(/-ms-popover$/, '');
- // ===== TEMP DIAGNOSTIC INSTRUMENTATION (remove after tap-bug diagnosis) =====
- const __msDbg = (msg, extra) => {
-   try {
-     const cs = getComputedStyle(trigger);
-     const r = pop.getBoundingClientRect();
-     const tr = trigger.getBoundingClientRect();
-     console.log('[ms-diag]', triggerId, msg, Object.assign({
-       hidden: pop.hidden,
-       ariaExpanded: trigger.getAttribute('aria-expanded'),
-       popoverRect: { x: r.x, y: r.y, w: r.width, h: r.height },
-       triggerRect: { x: tr.x, y: tr.y, w: tr.width, h: tr.height },
-       computed: {
-         pointerEvents: cs.pointerEvents, position: cs.position, zIndex: cs.zIndex,
-         visibility: cs.visibility, opacity: cs.opacity, display: cs.display
-       }
-     }, extra || {}));
-   } catch (err) { console.log('[ms-diag] logger-error', err && err.message); }
- };
- ['pointerdown', 'pointerup', 'touchstart', 'touchend'].forEach((evt) => {
-   trigger.addEventListener(evt, (e) => {
-     console.log('[ms-diag]', triggerId, 'trigger event:', evt,
-       { pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY });
-     try {
-       const els = document.elementsFromPoint(e.clientX, e.clientY).slice(0, 5)
-         .map((el) => el.id ? `${el.tagName}#${el.id}` : `${el.tagName}.${(el.className||'').toString().split(' ')[0]}`);
-       console.log('[ms-diag]', triggerId, `elementsFromPoint(${e.clientX},${e.clientY}):`, els);
-     } catch (_) {}
-   }, true); // capture so we see it even if something stops propagation
- });
- __msDbg('wired-at-init');
- // ===========================================================================
  trigger.addEventListener('click', () => {
    const willOpen = pop.hidden;
-   __msDbg('trigger-click-handler-enter', { willOpen });
    pop.hidden = !willOpen;
    trigger.setAttribute('aria-expanded', String(willOpen));
    if (willOpen) {
@@ -512,15 +480,12 @@ function wireMultiselectInstance({ triggerId, popoverId, containerId }) {
      trigger.focus();
      refreshRvEstimatePanels();
    }
-   __msDbg(willOpen ? 'opened-by-trigger-click' : 'closed-by-trigger-click');
  });
  document.addEventListener('click', (e) => {
-   __msDbg('document-click-seen', { targetDesc: e.target && (e.target.id ? `${e.target.tagName}#${e.target.id}` : e.target.tagName), popWasHiddenBeforeGuard: pop.hidden });
    if (pop.hidden) return;
    if (pop.contains(e.target) || trigger.contains(e.target)) return;
    closeMsPopover(trigger, pop);
    refreshRvEstimatePanels();
-   __msDbg('closed-by-document-click-outside');
  });
  document.addEventListener('keydown', (e) => {
    if (e.key === 'Escape' && !pop.hidden) { closeMsPopover(trigger, pop); trigger.focus(); }
