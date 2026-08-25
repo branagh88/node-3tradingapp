@@ -10,3 +10,4 @@ __pycache__/
 adws/adw_data/sessions/
 adws/adw_data/sssf.db*
 .env
+data/prediction-records.json

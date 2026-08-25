@@ -142,26 +142,22 @@ def test(run) -> QualityCheckResult:
         name="test",
         area="backend",
         operation="build",
-        argv=_placeholder("test"),        # e.g. ["bun", "test"] or ["uv", "run", "pytest", "-q"]
+        argv=["npx", "vitest", "run"],
         timeout_seconds=600,
     ), run)
 
 
-def lint(run) -> QualityCheckResult:
-    return _run(QualityCheckSpec(
-        name="lint",
-        area="backend",
-        operation="lint",
-        argv=_placeholder("lint"),        # e.g. ["bun", "x", "oxlint@1.36.0", "src"]
-    ), run)
+# No separate lint/typecheck runner in this repo: `npm run build` +
+# build-check.mjs parse every shipped module as valid ES modules, and vitest
+# covers behavior. Blocks removed from run_quality() below.
 
 
-def typecheck(run) -> QualityCheckResult:
+def smoke(run) -> QualityCheckResult:
     return _run(QualityCheckSpec(
-        name="typecheck",
+        name="smoke",
         area="backend",
-        operation="typecheck",
-        argv=_placeholder("typecheck"),   # e.g. ["bun", "x", "tsc", "--noEmit"]
+        operation="build",
+        argv=["npm", "run", "smoke"],
     ), run)
 
 
@@ -171,7 +167,7 @@ def build(run) -> QualityCheckResult:
         name="build",
         area="backend",
         operation="build",
-        argv=_placeholder("build"),       # e.g. ["bun", "build", "src/index.ts", "--outdir", str(output_dir)]
+        argv=["bash", "-c", "npm run build && node build-check.mjs"],   # parse-gates all shipped ES modules
     ), run)
 
 
@@ -222,9 +218,8 @@ def run_quality(run, only: str | None = None) -> QualityResult:
     """
     blocks: list[Callable] = [
         test,
-        lint,
-        typecheck,
         build,
+        smoke,
     ]
     if only:
         blocks = [b for b in blocks if b.__name__ == only]

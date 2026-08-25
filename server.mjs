@@ -26,6 +26,15 @@ import { request as httpsRequest } from 'node:https';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  isValidPredictionContract,
+  buildPredictionRecord,
+  validatePredictionRecord,
+  computeOutcomeLeaf,
+  RECORD_LIFECYCLE,
+  OUTCOME_STATUS,
+  RECORD_HORIZONS,
+} from './prediction-record.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_PREFIX = ROOT.endsWith(path.sep) ? ROOT : ROOT + path.sep;
@@ -54,6 +63,162 @@ function isBlockedPath(pathname) {
 
 function contentType(filePath) {
   return MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+// ---------------------------------------------------------------------------
+// /api/predictions — Phase B prediction persistence + outcome tracking.
+// Node-side file store: data/prediction-records.json (array of records).
+// Validation flows through the SAME pure prediction-record.js rules as the
+// browser repository so schemas cannot drift.
+// ---------------------------------------------------------------------------
+const PREDICTIONS_FILE = path.join(ROOT, 'data', 'prediction-records.json');
+
+async function readPredictions() {
+  try {
+    const raw = await fs.readFile(PREDICTIONS_FILE, 'utf8');
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writePredictions(records) {
+  try {
+    await fs.mkdir(path.dirname(PREDICTIONS_FILE), { recursive: true });
+    await fs.writeFile(PREDICTIONS_FILE, JSON.stringify(records, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders() });
+  res.end(JSON.stringify(obj));
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return null; }
+}
+
+async function handlePredictions(req, res, pathname, search) {
+  const url = new URL(search || '', 'http://localhost');
+  // GET /api/predictions            -> list/filter
+  if (pathname === '/api/predictions' && req.method === 'GET') {
+    const ticker = url.searchParams.get('ticker');
+    const status = url.searchParams.get('status');
+    let records = await readPredictions();
+    if (ticker) records = records.filter((r) => String(r.ticker || '').toUpperCase() === String(ticker).toUpperCase().trim());
+    if (status) records = records.filter((r) => r.lifecycleStatus === status);
+    return sendJson(res, 200, { records });
+  }
+
+  // POST /api/predictions           -> create (idempotent on identity)
+  if (pathname === '/api/predictions' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    if (body === null) return sendJson(res, 400, { error: 'invalid_json' });
+    const { contract, entryClose } = body || {};
+    if (!isValidPredictionContract(contract)) {
+      return sendJson(res, 422, { error: 'invalid_prediction_contract', detail: (contract && contract.status) || 'invalid' });
+    }
+    if (!(typeof entryClose === 'number' && Number.isFinite(entryClose) && entryClose > 0)) {
+      return sendJson(res, 422, { error: 'invalid_prediction_contract', detail: 'entryClose must be positive-finite' });
+    }
+    const records = await readPredictions();
+    const record = buildPredictionRecord(contract, entryClose, Date.now());
+    const check = validatePredictionRecord(record);
+    if (!check.ok) return sendJson(res, 422, { error: 'invalid_prediction_contract', detail: check.errors.join('; ') });
+    const existing = records.find((r) => r.id === record.id);
+    if (existing) return sendJson(res, 200, { record: existing, duplicate: true });
+    records.push(record);
+    if (!(await writePredictions(records))) {
+      return sendJson(res, 500, { error: 'prediction_store_error' });
+    }
+    return sendJson(res, 201, { record });
+  }
+
+  // GET /api/predictions/:id        -> retrieve
+  const outcomeMatch = pathname.match(/^\/api\/predictions\/(.+?)\/outcome$/);
+  const idMatch = !outcomeMatch ? pathname.match(/^\/api\/predictions\/(.+)$/) : null;
+  if (idMatch && req.method === 'GET') {
+    const id = decodeURIComponent(idMatch[1]);
+    const records = await readPredictions();
+    const record = records.find((r) => r.id === id);
+    if (!record) return sendJson(res, 404, { error: 'not_found' });
+    return sendJson(res, 200, { record });
+  }
+
+  // POST /api/predictions/:id/outcome -> resolve or finalize-insufficient
+  if (outcomeMatch && req.method === 'POST') {
+    const id = decodeURIComponent(outcomeMatch[1]);
+    const body = await readJsonBody(req);
+    if (body === null) return sendJson(res, 400, { error: 'invalid_json' });
+    const records = await readPredictions();
+    const idx = records.findIndex((r) => r.id === id);
+    if (idx < 0) return sendJson(res, 404, { error: 'not_found' });
+    const rec = records[idx];
+    if (rec.lifecycleStatus !== RECORD_LIFECYCLE.PENDING) {
+      // Terminal records are immutable — answer with the untouched record.
+      return sendJson(res, 200, { record: rec, noop: true });
+    }
+    const now = Date.now();
+    const next = JSON.parse(JSON.stringify(rec));
+
+    if (body && body.final === true) {
+      for (const h of RECORD_HORIZONS) {
+        const key = String(h);
+        const row = next.prediction.horizons[key];
+        if (!row || !row.direction) continue;
+        const leaf = next.outcomes[key];
+        if (leaf && leaf.status === OUTCOME_STATUS.RESOLVED) continue;
+        next.outcomes[key] = {
+          status: OUTCOME_STATUS.INSUFFICIENT, horizonDays: h, targetBarTime: null,
+          outcomeClose: null, returnPct: null, outcomeDirection: null,
+          predictedDirection: row.direction, correct: null, recordedAt: now,
+        };
+      }
+      next.lifecycleStatus = RECORD_LIFECYCLE.INSUFFICIENT;
+      next.updatedAt = now;
+      records[idx] = next;
+      if (!(await writePredictions(records))) return sendJson(res, 500, { error: 'prediction_store_error' });
+      return sendJson(res, 200, { record: next });
+    }
+
+    const bars = body && Array.isArray(body.bars) ? body.bars : null;
+    if (!bars) return sendJson(res, 422, { error: 'invalid_outcome_request', detail: 'bars array or final:true required' });
+    const condIdx = bars.findIndex((b) => b && b.t === rec.marketState.conditionBarTime);
+    if (condIdx < 0) return sendJson(res, 422, { error: 'condition_bar_not_in_series' });
+    if (!(bars[condIdx].c === rec.marketState.entryClose)) {
+      return sendJson(res, 409, { error: 'immutable_record', detail: 'located condition close differs from stored entry close' });
+    }
+    for (const h of RECORD_HORIZONS) {
+      const key = String(h);
+      const row = next.prediction.horizons[key];
+      if (!row || !row.direction) continue;
+      const leaf = next.outcomes[key];
+      if (leaf && leaf.status === OUTCOME_STATUS.RESOLVED) continue; // FINAL
+      next.outcomes[key] = computeOutcomeLeaf({
+        bars, condIdx, horizonDays: h, predictedDirection: row.direction,
+        entryClose: next.marketState.entryClose, recordedAt: now,
+      });
+    }
+    const allResolved = RECORD_HORIZONS.every((h) => {
+      const key = String(h);
+      return !next.prediction.horizons[key]?.direction
+        || (next.outcomes[key] && next.outcomes[key].status === OUTCOME_STATUS.RESOLVED);
+    });
+    if (allResolved) next.lifecycleStatus = RECORD_LIFECYCLE.RESOLVED;
+    next.updatedAt = now;
+    records[idx] = next;
+    if (!(await writePredictions(records))) return sendJson(res, 500, { error: 'prediction_store_error' });
+    return sendJson(res, 200, { record: next });
+  }
+
+  return sendJson(res, 404, { error: 'not_found' });
 }
 
 function corsHeaders() {
@@ -177,6 +342,13 @@ const server = createServer((req, res) => {
 
   if (pathname === '/v2' || pathname.startsWith('/v2/')) {
     return handleProxy(req, res, pathname, search);
+  }
+
+  if (pathname === '/api/predictions' || pathname.startsWith('/api/predictions/')) {
+    handlePredictions(req, res, pathname, search).catch(() => {
+      if (!res.headersSent) sendJson(res, 500, { error: 'prediction_store_error' });
+    });
+    return;
   }
 
   return serveStatic(req, res, pathname);

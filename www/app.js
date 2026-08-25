@@ -26,6 +26,7 @@ import { initEdgeScreen } from './edge-ui.js';
 import { setOddsApiKey, getOddsApiKey, clearOddsApiKey, setSerpApiKey, getSerpApiKey, clearSerpApiKey } from './sports-credentials.js';
 import { analyzePattern } from './pattern-engine.js';
 import { predictCurrentMarketState, renderLivePredictionHtml } from './live-prediction.js';
+import { PredictionRepository, renderPredictionRecordsHtml, isValidPredictionContract } from './prediction-repository.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -39,6 +40,7 @@ let realValidation = null;
 let edgeUiHandle = null;
 let currentRoute = '';
 let currentSymbol = null;
+const predictionRepo = new PredictionRepository();
 let pendingConfirm = null;
 
 // ---------------------------------------------------------------------------
@@ -153,6 +155,7 @@ async function boot() {
   guardedWire(wireEvents, '[boot] wireEvents');
   guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
  guardedWire(wireLivePrediction, '[boot] wireLivePrediction');
+  guardedWire(wirePredictionRecords, '[boot] wirePredictionRecords');
   guardedWire(wireRealValidation, '[boot] wireRealValidation');
   guardedWire(wireHistoricalRetrieval, '[boot] wireHistoricalRetrieval');
   guardedWire(() => { edgeUiHandle = initEdgeScreen(); }, '[boot] edge screen init');
@@ -356,6 +359,83 @@ async function runLivePrediction() {
    const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
    errorEl.innerHTML = `<strong>Live prediction failed.</strong><br>`
      + `Status: ${esc(status)}<br>`
+     + `Error type: ${esc((err && err.name) || 'Error')}<br>`
+     + `Message: ${esc(String((err && err.message) || err))}`;
+ } finally {
+   if (btn) btn.disabled = false;
+ }
+}
+
+// -------------------------------------------------------------------------
+// PREDICTION RECORDS (Phase B) — persists each valid Phase A prediction and
+// tracks its prospective outcomes over subsequent sessions. Duplicate-safe:
+// identity is deterministic per (ticker, condition date, schema version), so
+// repeated clicks on the same trading day never create a second record.
+// -------------------------------------------------------------------------
+function wirePredictionRecords() {
+ const panel = document.getElementById('hist-panel');
+ const btn = document.getElementById('pred-records-btn');
+ if (!panel || !btn) return;
+ btn.addEventListener('click', runSaveOrRefreshPredictionRecord);
+ try {
+   bus.on('watchlist:changed', () => {
+     const resultsEl = document.getElementById('pred-records-results');
+     if (resultsEl) resultsEl.innerHTML = '';
+   });
+ } catch { /* event bus unavailable */ }
+}
+
+async function runSaveOrRefreshPredictionRecord() {
+ const progressEl = document.getElementById('pred-records-progress');
+ const errorEl = document.getElementById('pred-records-error');
+ const resultsEl = document.getElementById('pred-records-results');
+ const btn = document.getElementById('pred-records-btn');
+ if (!progressEl || !errorEl || !resultsEl) return;
+ const symbol = currentSymbol;
+ const depth = (document.getElementById('hist-depth') || {}).value || '1y';
+ if (!symbol || !histAnalysis) {
+   errorEl.hidden = false;
+   errorEl.textContent = !symbol
+     ? 'No asset selected.'
+     : 'Prediction record failed. API client not initialized.';
+   return;
+ }
+ errorEl.hidden = true;
+ progressEl.hidden = false;
+ progressEl.textContent = 'Saving / refreshing prediction record... (reuses cached historical data)';
+ if (btn) btn.disabled = true;
+ try {
+   const contract = await predictCurrentMarketState(symbol, {
+     histController: histAnalysis,
+     depth,
+     onProgress: ({ message }) => { progressEl.textContent = message; },
+   });
+   if (!isValidPredictionContract(contract)) {
+     progressEl.hidden = true;
+     resultsEl.innerHTML = `<div class="hint">Not persisted: ${esc(contract.status || 'INVALID')}`
+       + (contract.reason ? ` — ${esc(contract.reason)}` : '') + '</div>';
+     return;
+   }
+   // Entry close comes from the SAME cached series the engine consumed.
+   const r = await histAnalysis.run({ ticker: symbol, depth });
+   const bars = r && Array.isArray(r.bars) ? r.bars : [];
+   const condIdx = bars.findIndex((b) => b.t === contract.conditionTime);
+   const entryClose = condIdx >= 0 ? bars[condIdx].c : NaN;
+   let record = predictionRepo.createPrediction(contract, { entryClose });
+   if (!record) {
+     progressEl.hidden = true;
+     resultsEl.innerHTML = '<div class="hint">Not persisted: invalid prediction contract.</div>';
+     return;
+   }
+   // Opportunistically resolve horizons whose future candles have arrived.
+   try { record = predictionRepo.recordPredictionOutcome(record.id, bars) || record; } catch { /* keep pending */ }
+   const records = predictionRepo.listPredictions({ ticker: symbol });
+   progressEl.hidden = true;
+   resultsEl.innerHTML = renderPredictionRecordsHtml(records);
+ } catch (err) {
+   progressEl.hidden = true;
+   errorEl.hidden = false;
+   errorEl.innerHTML = `<strong>Prediction record failed.</strong><br>`
      + `Error type: ${esc((err && err.name) || 'Error')}<br>`
      + `Message: ${esc(String((err && err.message) || err))}`;
  } finally {
