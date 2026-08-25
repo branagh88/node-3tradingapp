@@ -25,6 +25,7 @@ import {
 import { initEdgeScreen } from './edge-ui.js';
 import { setOddsApiKey, getOddsApiKey, clearOddsApiKey, setSerpApiKey, getSerpApiKey, clearSerpApiKey } from './sports-credentials.js';
 import { analyzePattern } from './pattern-engine.js';
+import { predictCurrentMarketState, renderLivePredictionHtml } from './live-prediction.js';
 import { walkForwardBacktest } from './prediction-engine.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -151,6 +152,7 @@ async function boot() {
   guardedWire(wireConfirmModal, '[boot] wireConfirmModal');
   guardedWire(wireEvents, '[boot] wireEvents');
   guardedWire(wireHistoricalAnalysis, '[boot] wireHistoricalAnalysis');
+ guardedWire(wireLivePrediction, '[boot] wireLivePrediction');
   guardedWire(wireRealValidation, '[boot] wireRealValidation');
   guardedWire(wireHistoricalRetrieval, '[boot] wireHistoricalRetrieval');
   guardedWire(() => { edgeUiHandle = initEdgeScreen(); }, '[boot] edge screen init');
@@ -299,6 +301,66 @@ function wireHistoricalAnalysis() {
  });
  const analyzeBtn = document.getElementById('hist-analyze');
  if (analyzeBtn) analyzeBtn.addEventListener('click', runHistoricalAnalysis);
+}
+
+// -------------------------------------------------------------------------
+// LIVE PREDICTION (Phase A) — runs the SAME local pattern engine against the
+// latest retrieved candle via the shared HistoricalAnalysisController session
+// cache. Conditional historical frequency only — NOT a forecast.
+// -------------------------------------------------------------------------
+function wireLivePrediction() {
+ const panel = document.getElementById('hist-panel');
+ const btn = document.getElementById('live-predict-btn');
+ if (!panel || !btn) return;
+ btn.addEventListener('click', runLivePrediction);
+ // A removed ticker's stale live prediction must never be shown for a
+ // different symbol — clear results whenever the watchlist changes.
+ try {
+   bus.on('watchlist:changed', () => {
+     const resultsEl = document.getElementById('live-prediction-results');
+     if (resultsEl) resultsEl.innerHTML = '';
+   });
+ } catch { /* event bus unavailable */ }
+}
+
+async function runLivePrediction() {
+ const progressEl = document.getElementById('live-prediction-progress');
+ const errorEl = document.getElementById('live-prediction-error');
+ const resultsEl = document.getElementById('live-prediction-results');
+ const btn = document.getElementById('live-predict-btn');
+ if (!progressEl || !errorEl || !resultsEl) return;
+ const symbol = currentSymbol;
+ const depth = (document.getElementById('hist-depth') || {}).value || '1y';
+ if (!symbol || !histAnalysis) {
+   errorEl.hidden = false;
+   errorEl.textContent = !symbol
+     ? 'No asset selected.'
+     : 'Live prediction failed. API client not initialized.';
+   return;
+ }
+ errorEl.hidden = true;
+ progressEl.hidden = false;
+ progressEl.textContent = 'Predicting current market state... (reuses cached historical data)';
+ if (btn) btn.disabled = true;
+ try {
+   const contract = await predictCurrentMarketState(symbol, {
+     histController: histAnalysis,
+     depth,
+     onProgress: ({ message }) => { progressEl.textContent = message; },
+   });
+   progressEl.hidden = true;
+   resultsEl.innerHTML = renderLivePredictionHtml(contract);
+ } catch (err) {
+   progressEl.hidden = true;
+   errorEl.hidden = false;
+   const status = err && err.status != null ? `HTTP ${err.status}` : 'status unknown';
+   errorEl.innerHTML = `<strong>Live prediction failed.</strong><br>`
+     + `Status: ${esc(status)}<br>`
+     + `Error type: ${esc((err && err.name) || 'Error')}<br>`
+     + `Message: ${esc(String((err && err.message) || err))}`;
+ } finally {
+   if (btn) btn.disabled = false;
+ }
 }
 
 // -------------------------------------------------------------------------
