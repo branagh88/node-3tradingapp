@@ -283,6 +283,15 @@
         <div id="hist-error" class="error-banner" hidden></div>
         <div id="hist-results"></div>
         <hr style="margin:16px 0;border:none;border-top:1px solid var(--border,#ddd);">
+        <h3>Current Market State Prediction</h3>
+        <p class="hint">Runs the SAME local pattern engine against the latest retrieved candle. Conditional historical frequency only — NOT a forecast.</p>
+        <div class="field-row">
+          <button id="live-predict-btn" type="button" class="btn btn--primary">PREDICT CURRENT STATE</button>
+        </div>
+        <div id="live-prediction-progress" class="hint" hidden></div>
+        <div id="live-prediction-error" class="error-banner" hidden></div>
+        <div id="live-prediction-results"></div>
+        <hr style="margin:16px 0;border:none;border-top:1px solid var(--border,#ddd);">
         <h3>Historical data</h3>
         <p class="hint">Explicitly retrieve daily datasets for selected tickers into the shared session cache. Zero API calls until you press the button.</p>
         <div class="field-row">
